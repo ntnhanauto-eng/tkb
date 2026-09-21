@@ -1,0 +1,1177 @@
+<?php
+// admin.php
+session_start();
+require 'db.php';
+
+if (!isset($_SESSION['auth_user'])) {
+    header('Location: login.php');
+    exit;
+}
+
+$user = $_SESSION['auth_user'];
+$is_admin = ($user['role'] === 'admin');
+$be_filter = $is_admin ? ($_GET['be'] ?? '1') : $user['be_name'];
+
+// Danh sách các ngày trong tuần
+$days_map = [
+    'thu2' => 'Thứ 2',
+    'thu3' => 'Thứ 3',
+    'thu4' => 'Thứ 4',
+    'thu5' => 'Thứ 5',
+    'thu6' => 'Thứ 6',
+    'thu7' => 'Thứ 7',
+    'cn'   => 'Chủ Nhật'
+];
+
+// Thiết lập mã màu chủ đạo đồng bộ theo bé
+$kid_theme_color  = ($be_filter === '1') ? '#10b981' : '#2563eb'; 
+$kid_theme_light  = ($be_filter === '1') ? '#ecfdf5' : '#eff6ff';
+$kid_theme_border = ($be_filter === '1') ? '#a7f3d0' : '#bfdbfe';
+
+// Tự động tạo bảng lưu cấu hình học kỳ, năm học, splash screen nếu chưa có
+$conn->exec("CREATE TABLE IF NOT EXISTS app_settings (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    setting_key VARCHAR(50) UNIQUE,
+    setting_val TEXT
+)");
+
+$default_settings = [
+    'kid1_name'   => 'Trâm Anh',
+    'kid1_class'  => '6A3',
+    'kid2_name'   => 'Thành Phát',
+    'kid2_class'  => '10A4',
+    'semester'    => 'HK1',
+    'school_year' => '2026-2027',
+    'splash_img'  => 'https://thanhnhan.site/tkb/thoikhoabieu.png',
+    'splash_text' => 'Đang tải thời khóa biểu...'
+];
+
+foreach ($default_settings as $k => $v) {
+    $st = $conn->prepare("INSERT IGNORE INTO app_settings (setting_key, setting_val) VALUES (?, ?)");
+    $st->execute([$k, $v]);
+}
+
+$msg = '';
+$err = '';
+
+// 1. LƯU CẤU HÌNH HỌC KỲ / NĂM HỌC / CÁC BÉ / SPLASH SCREEN
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_general_settings'])) {
+    if ($is_admin) {
+        $keys = ['kid1_name', 'kid1_class', 'kid2_name', 'kid2_class', 'semester', 'school_year', 'splash_img', 'splash_text'];
+        foreach ($keys as $k) {
+            $val = trim($_POST[$k] ?? '');
+            $st = $conn->prepare("UPDATE app_settings SET setting_val = ? WHERE setting_key = ?");
+            $st->execute([$val, $k]);
+        }
+        $msg = 'Đã cập nhật thông tin hệ thống và ảnh khởi động thành công!';
+    }
+}
+
+// Lấy thông tin cài đặt hiện tại
+$st_set = $conn->query("SELECT setting_key, setting_val FROM app_settings");
+$settings = $st_set->fetchAll(PDO::FETCH_KEY_PAIR);
+
+// Đăng xuất
+if (isset($_GET['action']) && $_GET['action'] === 'logout') {
+    session_destroy();
+    header('Location: index.php');
+    exit;
+}
+
+// 2. DI CHUYỂN TIẾT HỌC LÊN / XUỐNG
+if (isset($_GET['move']) && isset($_GET['id'])) {
+    $move_id = intval($_GET['id']);
+    $direction = $_GET['move']; // 'up' hoặc 'down'
+
+    $stmt = $conn->prepare("SELECT * FROM schedule WHERE id = ?");
+    $stmt->execute([$move_id]);
+    $curr = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($curr) {
+        $c_buoi = $curr['buoi'];
+
+        $stmt_all = $conn->prepare("SELECT id FROM schedule WHERE be_name = ? AND buoi = ? ORDER BY id ASC");
+        $stmt_all->execute([$be_filter, $c_buoi]);
+        $id_list = $stmt_all->fetchAll(PDO::FETCH_COLUMN);
+
+        $pos = array_search($move_id, $id_list);
+
+        if ($pos !== false) {
+            $target_pos = ($direction === 'up') ? ($pos - 1) : ($pos + 1);
+
+            if ($target_pos >= 0 && $target_pos < count($id_list)) {
+                $target_id = $id_list[$target_pos];
+
+                $stmt_target = $conn->prepare("SELECT * FROM schedule WHERE id = ?");
+                $stmt_target->execute([$target_id]);
+                $target = $stmt_target->fetch(PDO::FETCH_ASSOC);
+
+                if ($target) {
+                    $cols = ['tiet', 'thu2', 'thu3', 'thu4', 'thu5', 'thu6', 'thu7', 'cn', 't_thu2', 't_thu3', 't_thu4', 't_thu5', 't_thu6', 't_thu7', 't_cn'];
+
+                    $sql_update = "UPDATE schedule SET tiet=?, thu2=?, thu3=?, thu4=?, thu5=?, thu6=?, thu7=?, cn=?, t_thu2=?, t_thu3=?, t_thu4=?, t_thu5=?, t_thu6=?, t_thu7=?, t_cn=? WHERE id=?";
+
+                    $params_curr = [];
+                    foreach ($cols as $col) { $params_curr[] = $target[$col] ?? null; }
+                    $params_curr[] = $curr['id'];
+                    $conn->prepare($sql_update)->execute($params_curr);
+
+                    $params_target = [];
+                    foreach ($cols as $col) { $params_target[] = $curr[$col] ?? null; }
+                    $params_target[] = $target['id'];
+                    $conn->prepare($sql_update)->execute($params_target);
+
+                    header("Location: admin.php?be={$be_filter}");
+                    exit;
+                }
+            }
+        }
+    }
+}
+
+// 3. KHỞI TẠO KHUNG GIỜ MẪU (TIẾT 1 - TIẾT 5 + HỌC THÊM)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['init_standard_slots'])) {
+    $target_be = $is_admin ? $_POST['target_be'] : $user['be_name'];
+    $sample_slots = [
+        ['buoi' => 'SÁNG',  'tiet' => 'Tiết 1 (07:15 - 08:00)'],
+        ['buoi' => 'SÁNG',  'tiet' => 'Tiết 2 (08:05 - 08:50)'],
+        ['buoi' => 'SÁNG',  'tiet' => 'Tiết 3 (09:05 - 09:50)'],
+        ['buoi' => 'SÁNG',  'tiet' => 'Tiết 4 (09:55 - 10:40)'],
+        ['buoi' => 'SÁNG',  'tiet' => 'Tiết 5 (10:45 - 11:30)'],
+        ['buoi' => 'CHIỀU', 'tiet' => 'Tiết 1 (13:30 - 14:15)'],
+        ['buoi' => 'CHIỀU', 'tiet' => 'Tiết 2 (14:20 - 15:05)'],
+        ['buoi' => 'CHIỀU', 'tiet' => 'Tiết 3 (15:20 - 16:05)'],
+        ['buoi' => 'CHIỀU', 'tiet' => 'Tiết 4 (16:10 - 16:55)'],
+        ['buoi' => 'CHIỀU', 'tiet' => 'Tiết 5 (17:00 - 17:45)'],
+        ['buoi' => 'TỐI',   'tiet' => 'Học thêm Ca 1 (18:00 - 19:30)'],
+        ['buoi' => 'TỐI',   'tiet' => 'Học thêm Ca 2 (19:45 - 21:15)']
+    ];
+
+    foreach ($sample_slots as $slot) {
+        $st = $conn->prepare("SELECT id FROM schedule WHERE be_name = ? AND tiet = ?");
+        $st->execute([$target_be, $slot['tiet']]);
+        if (!$st->fetch()) {
+            $ins = $conn->prepare("INSERT INTO schedule (be_name, buoi, tiet, thu2, thu3, thu4, thu5, thu6, thu7, cn) VALUES (?, ?, ?, '', '', '', '', '', '', '')");
+            $ins->execute([$target_be, $slot['buoi'], $slot['tiet']]);
+        }
+    }
+    $msg = "Đã khởi tạo đủ khung giờ từ Tiết 1 - 5 và Ca học thêm!";
+}
+
+// 4. THÊM TIẾT / CA HỌC TÙY CHỌN
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lesson_row'])) {
+    $target_be = $is_admin ? $_POST['target_be'] : $user['be_name'];
+    $buoi = trim($_POST['buoi'] ?? 'SÁNG');
+    $tiet = trim($_POST['tiet'] ?? '');
+
+    if (!empty($tiet)) {
+        $stmt = $conn->prepare("INSERT INTO schedule (be_name, buoi, tiet, thu2, thu3, thu4, thu5, thu6, thu7, cn) VALUES (?, ?, ?, '', '', '', '', '', '', '')");
+        $stmt->execute([$target_be, $buoi, $tiet]);
+        $msg = 'Đã thêm khung giờ/tiết học mới thành công!';
+    } else {
+        $err = 'Vui lòng nhập tên tiết hoặc giờ học!';
+    }
+}
+
+// 5. CHỈNH SỬA TÊN TIẾT / BUỔI CỦA KHUNG GIỜ (QUA MODAL)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_slot_info'])) {
+    $slot_id = intval($_POST['slot_id']);
+    $buoi = trim($_POST['edit_buoi'] ?? 'SÁNG');
+    $tiet = trim($_POST['edit_tiet'] ?? '');
+
+    if (!empty($tiet)) {
+        if ($is_admin) {
+            $stmt = $conn->prepare("UPDATE schedule SET buoi = ?, tiet = ? WHERE id = ?");
+            $stmt->execute([$buoi, $tiet, $slot_id]);
+        } else {
+            $stmt = $conn->prepare("UPDATE schedule SET buoi = ?, tiet = ? WHERE id = ? AND be_name = ?");
+            $stmt->execute([$buoi, $tiet, $slot_id, $user['be_name']]);
+        }
+        $msg = 'Đã cập nhật tên tiết/buổi thành công!';
+    }
+}
+
+// 6. XÓA KHUNG GIỜ / TIẾT HỌC
+if (isset($_GET['del_schedule'])) {
+    $del_id = intval($_GET['del_schedule']);
+    if ($is_admin) {
+        $stmt = $conn->prepare("DELETE FROM schedule WHERE id = ?");
+        $stmt->execute([$del_id]);
+    } else {
+        $stmt = $conn->prepare("DELETE FROM schedule WHERE id = ? AND be_name = ?");
+        $stmt->execute([$del_id, $user['be_name']]);
+    }
+    header("Location: admin.php?be={$be_filter}");
+    exit;
+}
+
+// 7. LƯU TOÀN BỘ LỊCH HỌC TRONG TUẦN (TẤT CẢ CÁC THỨ VÀ TIẾT)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all_schedule'])) {
+    $sched_matrix = $_POST['sched'] ?? [];
+
+    foreach ($sched_matrix as $s_id => $days_data) {
+        $s_id = intval($s_id);
+        
+        $sql_parts = [];
+        $params = [];
+
+        foreach ($days_map as $d_key => $d_title) {
+            $sub = trim($days_data[$d_key]['sub'] ?? '');
+            $note = trim($days_data[$d_key]['note'] ?? '');
+            $t_id = (!empty($sub) && !empty($days_data[$d_key]['teacher'])) ? intval($days_data[$d_key]['teacher']) : null;
+
+            $cell_text = $sub;
+            if (!empty($note)) {
+                $cell_text .= "\n" . $note;
+            }
+
+            $sql_parts[] = "`{$d_key}` = ?";
+            $sql_parts[] = "`t_{$d_key}` = ?";
+            $params[] = $cell_text;
+            $params[] = $t_id;
+        }
+
+        $params[] = $s_id;
+        $sql = "UPDATE schedule SET " . implode(', ', $sql_parts) . " WHERE id = ?";
+
+        if (!$is_admin) {
+            $sql .= " AND be_name = ?";
+            $params[] = $user['be_name'];
+        }
+
+        $stmt = $conn->prepare($sql);
+        $stmt->execute($params);
+    }
+    $msg = "Đã lưu toàn bộ lịch học trong tuần thành công!";
+}
+
+// 8. THÊM / SỬA / XÓA GIÁO VIÊN
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_teacher'])) {
+    $target_be = $is_admin ? $_POST['target_be'] : $user['be_name'];
+    $sub_name  = trim($_POST['subject_name'] ?? '');
+    $t_name    = trim($_POST['teacher_name'] ?? '');
+    $phone     = trim($_POST['phone'] ?? '');
+    $note      = trim($_POST['note'] ?? '');
+
+    if ($sub_name && $t_name) {
+        $stmt = $conn->prepare("INSERT INTO teachers (be_name, subject_name, teacher_name, phone, note) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$target_be, $sub_name, $t_name, $phone, $note]);
+        $msg = 'Đã thêm giáo viên thành công!';
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_teacher'])) {
+    $teacher_id = intval($_POST['teacher_id']);
+    $sub_name   = trim($_POST['subject_name'] ?? '');
+    $t_name     = trim($_POST['teacher_name'] ?? '');
+    $phone      = trim($_POST['phone'] ?? '');
+    $note       = trim($_POST['note'] ?? '');
+
+    if ($sub_name && $t_name) {
+        if ($is_admin) {
+            $stmt = $conn->prepare("UPDATE teachers SET subject_name = ?, teacher_name = ?, phone = ?, note = ? WHERE id = ?");
+            $stmt->execute([$sub_name, $t_name, $phone, $note, $teacher_id]);
+        } else {
+            $stmt = $conn->prepare("UPDATE teachers SET subject_name = ?, teacher_name = ?, phone = ?, note = ? WHERE id = ? AND be_name = ?");
+            $stmt->execute([$sub_name, $t_name, $phone, $note, $teacher_id, $user['be_name']]);
+        }
+        $msg = 'Đã cập nhật thông tin giáo viên thành công!';
+    }
+}
+
+if (isset($_GET['del_teacher'])) {
+    $t_id = intval($_GET['del_teacher']);
+    if ($is_admin) {
+        $stmt = $conn->prepare("DELETE FROM teachers WHERE id = ?");
+        $stmt->execute([$t_id]);
+    } else {
+        $stmt = $conn->prepare("DELETE FROM teachers WHERE id = ? AND be_name = ?");
+        $stmt->execute([$t_id, $user['be_name']]);
+    }
+    header("Location: admin.php?be={$be_filter}");
+    exit;
+}
+
+// Lấy danh sách giáo viên & thời khóa biểu
+$stmt_t = $conn->prepare("SELECT * FROM teachers WHERE be_name = ? ORDER BY subject_name ASC");
+$stmt_t->execute([$be_filter]);
+$teachers = $stmt_t->fetchAll(PDO::FETCH_ASSOC);
+
+$stmt = $conn->prepare("SELECT * FROM schedule WHERE be_name = ? ORDER BY FIELD(buoi, 'SÁNG', 'CHIỀU', 'TỐI'), id ASC");
+$stmt->execute([$be_filter]);
+$schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$kid_names = [
+    '1' => ($settings['kid1_name'] ?? 'Trâm Anh') . ' (Lớp ' . ($settings['kid1_class'] ?? '6A3') . ')',
+    '2' => ($settings['kid2_name'] ?? 'Thành Phát') . ' (Lớp ' . ($settings['kid2_class'] ?? '10A4') . ')'
+];
+?>
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản Trị Lịch Học & Giáo Viên</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root { 
+            --primary: #4338ca; 
+            --bg: #f8fafc; 
+            --border: #cbd5e1; 
+            --text-main: #0f172a; 
+            --text-bold: #000000;
+            --kid-color: <?php echo $kid_theme_color; ?>;
+            --kid-light: <?php echo $kid_theme_light; ?>;
+            --kid-border: <?php echo $kid_theme_border; ?>;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: 'Plus Jakarta Sans', sans-serif; 
+            background: var(--bg); 
+            color: var(--text-main); 
+            font-weight: 600; 
+            padding-bottom: 70px; 
+            -webkit-font-smoothing: antialiased;
+        }
+        .navbar {
+            background: white; border-bottom: 2px solid var(--border); padding: 14px 18px;
+            display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 50;
+            transition: all 0.3s ease;
+        }
+        .user-tag { font-size: 14px; font-weight: 800; color: var(--text-bold); display: flex; align-items: center; gap: 8px; }
+        .role-badge { font-size: 11px; padding: 3px 8px; border-radius: 6px; font-weight: 800; }
+        .btn-sm { padding: 7px 13px; border-radius: 8px; font-size: 13px; font-weight: 800; text-decoration: none; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+        .btn-gray { background: #e2e8f0; color: #1e293b; border: 1px solid #cbd5e1; }
+        .btn-red { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 16px; transition: all 0.3s ease; }
+
+        /* Mặc định ẩn nút Full màn hình, chỉ hiện khi quay ngang (landscape) */
+        #btnFullscreenToggle { display: none !important; }
+
+        @media (orientation: landscape) {
+            #btnFullscreenToggle { display: inline-flex !important; }
+        }
+
+        /* Chế độ Full màn hình */
+        body.fullscreen-mode .navbar { display: none !important; }
+        body.fullscreen-mode .admin-switcher,
+        body.fullscreen-mode .btn-toggle-box,
+        body.fullscreen-mode #teacherSectionBox,
+        body.fullscreen-mode #settingsSectionBox,
+        body.fullscreen-mode .section-box:not(:has(#scheduleMatrixSection)),
+        body.fullscreen-mode form:has(input[name="add_lesson_row"]) { display: none !important; }
+        body.fullscreen-mode .container { max-width: 100% !important; padding: 4px !important; }
+        body.fullscreen-mode .matrix-table-responsive { max-height: 92vh !important; border-radius: 6px; }
+
+        .admin-switcher { 
+            background: white; padding: 12px; border-radius: 14px; border: 1.5px solid var(--border); 
+            margin-bottom: 14px; display: flex; align-items: center; gap: 10px; 
+        }
+        .switch-btn { 
+            flex: 1; padding: 10px; text-align: center; border-radius: 10px; font-size: 14px; font-weight: 800; 
+            text-decoration: none; background: #f8fafc; color: #1e293b; border: 1.5px solid var(--border); 
+        }
+        .switch-btn.active[data-be="1"] { background: #10b981; color: white; border-color: #10b981; }
+        .switch-btn.active[data-be="2"] { background: #2563eb; color: white; border-color: #2563eb; }
+
+        .section-box { 
+            background: white; border-radius: 16px; border: 1.5px solid var(--border); 
+            padding: 18px; margin-bottom: 22px; box-shadow: 0 2px 4px rgba(0,0,0,0.03); 
+        }
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+        .section-header h3 { font-size: 17px; font-weight: 800; color: var(--kid-color); display: flex; align-items: center; gap: 8px; }
+
+        /* Nút toggle mở/đóng các section */
+        .btn-toggle-box {
+            width: 100%;
+            background: white;
+            border-radius: 14px;
+            padding: 14px 18px;
+            font-size: 15px;
+            font-weight: 800;
+            font-family: inherit;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: all 0.2s;
+            margin-bottom: 16px;
+        }
+        .btn-toggle-teacher {
+            color: var(--kid-color);
+            border: 2px dashed var(--kid-color);
+        }
+        .btn-toggle-teacher:hover { background: var(--kid-light); }
+
+        .btn-toggle-settings {
+            color: #4338ca;
+            border: 2px dashed #818cf8;
+            background: #ffffff;
+        }
+        .btn-toggle-settings:hover { background: #eef2ff; }
+
+        /* Form Thêm Giáo Viên Linh Hoạt */
+        .teacher-form-flex {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-end;
+            margin-bottom: 16px;
+        }
+        .teacher-input-item {
+            flex: 1 1 200px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .teacher-input-item label {
+            font-size: 12px;
+            font-weight: 800;
+            color: #334155;
+            white-space: nowrap;
+        }
+
+        .form-control { 
+            width: 100%; padding: 8px 10px; border-radius: 8px; border: 1.5px solid var(--border); 
+            font-size: 13px; font-family: inherit; font-weight: 700; color: var(--text-bold); outline: none; background: #ffffff;
+        }
+        .form-control:focus { border-color: var(--kid-color); }
+        .form-control:disabled { background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }
+
+        .btn-primary { 
+            background: var(--kid-color); color: white; padding: 10px 18px; border: none; border-radius: 10px; 
+            font-weight: 800; font-size: 13px; cursor: pointer; transition: all 0.2s; 
+        }
+        .btn-primary:active { transform: scale(0.98); }
+
+        /* Bảng Danh Sách Giáo Viên */
+        .teacher-table-responsive {
+            width: 100%; overflow-x: auto; margin-top: 14px; border-radius: 12px; border: 1.5px solid var(--border);
+        }
+        .teacher-table {
+            width: 100%; border-collapse: collapse; text-align: left; background: white; font-size: 13px;
+        }
+        .teacher-table th {
+            background: var(--kid-light); color: var(--kid-color); font-weight: 800; padding: 12px 14px;
+            border-bottom: 1.5px solid var(--kid-border); white-space: nowrap;
+        }
+        .teacher-table td {
+            padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
+        }
+        .teacher-table tr:last-child td { border-bottom: none; }
+        .teacher-table tr:hover { background: #f8fafc; }
+        .cell-sub { font-weight: 800; color: var(--kid-color); text-transform: uppercase; }
+        .cell-name { font-weight: 800; color: var(--text-bold); }
+        .cell-phone a { color: #065f46; text-decoration: none; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
+        .cell-note { color: #475569; font-weight: 600; font-size: 12px; }
+
+        /* Cột thao tác giáo viên */
+        .action-cell-flex {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        /* Nút mũi tên di chuyển tiết lên/xuống */
+        .move-btns { display: inline-flex; gap: 4px; align-items: center; }
+        .btn-move {
+            width: 30px; height: 30px; border-radius: 8px; border: 1.5px solid var(--kid-border);
+            background: white; color: var(--kid-color); display: inline-flex; align-items: center; justify-content: center;
+            text-decoration: none; font-size: 11px; font-weight: 800; transition: all 0.2s;
+        }
+        .btn-move:hover { background: var(--kid-color); color: white; }
+
+        /* Dropdown thao tác - TRÁNH BỊ CHE KHUẤT */
+        .action-dropdown-wrapper { position: relative; display: inline-block; z-index: 20; }
+        .btn-action-trigger {
+            width: 30px; height: 30px; border-radius: 8px; border: 1.5px solid var(--kid-border);
+            background: var(--kid-light); color: var(--kid-color); cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center; font-size: 12px; transition: all 0.2s;
+        }
+        .btn-action-trigger:hover { background: var(--kid-color); color: #ffffff; border-color: var(--kid-color); }
+        .action-dropdown-menu {
+            display: none; position: absolute; left: 0; top: 34px; background: white;
+            border-radius: 10px; box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.25);
+            border: 1.5px solid var(--border); z-index: 99999; min-width: 140px; overflow: hidden;
+        }
+        .action-dropdown-menu.show { display: block; }
+        .action-item {
+            display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 12px;
+            font-weight: 700; color: #1e293b; text-decoration: none; cursor: pointer; border: none; background: transparent; width: 100%; text-align: left;
+        }
+        .action-item:hover { background: #f1f5f9; }
+        .action-item.del { color: #dc2626; border-top: 1px solid #f1f5f9; }
+        .action-item.del:hover { background: #fee2e2; }
+
+        /* Modal Popup Sửa */
+        .edit-modal-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(4px); z-index: 99999; align-items: center; justify-content: center; padding: 16px;
+        }
+        .edit-modal-content {
+            background: #ffffff; width: 100%; max-width: 440px; border-radius: 16px;
+            border: 1.5px solid var(--border); padding: 20px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.15);
+        }
+        .edit-modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1.5px solid var(--border);
+        }
+        .edit-modal-header h4 { font-size: 16px; font-weight: 800; color: var(--kid-color); display: flex; align-items: center; gap: 6px; }
+
+        /* Bảng ma trận lịch học toàn tuần */
+        .matrix-table-responsive { 
+            width: 100%; 
+            overflow-x: auto; 
+            overflow-y: visible; 
+            max-height: none;
+            margin-top: 10px; 
+            border-radius: 12px;
+            border: 1.5px solid var(--border);
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 80px; 
+        }
+        .matrix-table { 
+            width: 100%; 
+            min-width: 1650px; 
+            border-collapse: separate; 
+            border-spacing: 0;
+            background: white;
+        }
+        .matrix-table th { 
+            font-size: 12px; 
+            font-weight: 800; 
+            text-transform: uppercase; 
+            color: #475569; 
+            background: #f1f5f9;
+            padding: 12px 10px; 
+            text-align: center; 
+            border-bottom: 2px solid var(--border);
+            border-right: 1px solid var(--border);
+            white-space: nowrap; 
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .matrix-table th:last-child { border-right: none; }
+        
+        .matrix-table td { 
+            padding: 10px; 
+            border-bottom: 1px solid var(--border); 
+            border-right: 1px solid var(--border); 
+            vertical-align: top;
+            background: #ffffff;
+            position: relative; 
+        }
+        .matrix-table td:last-child { border-right: none; }
+        .matrix-table tr:hover td { background: #fafafa; }
+
+        .col-tiet-info { 
+            width: 180px; 
+            min-width: 180px; 
+            background: #f8fafc !important; 
+            text-align: center; 
+            vertical-align: middle !important; 
+            overflow: visible !important;
+        }
+        .col-day-cell { width: 210px; min-width: 210px; white-space: nowrap; }
+
+        .badge-buoi { font-size: 10px; font-weight: 800; padding: 3px 6px; border-radius: 5px; display: inline-block; margin-bottom: 4px; white-space: nowrap; }
+        .badge-buoi.sang { background: #fef3c7; color: #b45309; }
+        .badge-buoi.chieu { background: #e0f2fe; color: #0369a1; }
+        .badge-buoi.toi { background: #f3e8ff; color: #7e22ce; }
+
+        .slot-vertical-box {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        .slot-vertical-box label {
+            font-size: 11px;
+            font-weight: 800;
+            color: #64748b;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .alert-success { background: #dcfce7; color: #166534; padding: 12px 16px; border-radius: 12px; font-size: 14px; font-weight: 800; margin-bottom: 16px; border: 1.5px solid #86efac; }
+        .alert-danger { background: #fee2e2; color: #991b1b; padding: 12px 16px; border-radius: 12px; font-size: 14px; font-weight: 800; margin-bottom: 16px; border: 1.5px solid #fca5a5; }
+
+        @media (max-width: 768px) {
+            .teacher-input-item {
+                flex: 1 1 100% !important;
+            }
+            .teacher-form-flex button {
+                width: 100%;
+                margin-top: 6px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header class="navbar">
+        <div class="user-tag">
+            <i class="fa-solid fa-circle-user" style="color: var(--kid-color); font-size: 18px;"></i>
+            <span><?php echo htmlspecialchars($user['fullname']); ?></span>
+            <span class="role-badge" style="background: var(--kid-light); color: var(--kid-color);"><?php echo $is_admin ? 'ADMIN TỐI CAO' : 'TÀI KHOẢN BÉ'; ?></span>
+        </div>
+        <div>
+            <a href="index.php" class="btn-sm btn-gray mr-1"><i class="fa-solid fa-eye"></i> Xem App</a>
+            <a href="admin.php?action=logout" class="btn-sm btn-red"><i class="fa-solid fa-power-off"></i> Đăng xuất</a>
+        </div>
+    </header>
+
+    <main class="container">
+        <?php if ($msg): ?><div class="alert-success"><i class="fa-solid fa-circle-check"></i> <?php echo $msg; ?></div><?php endif; ?>
+        <?php if ($err): ?><div class="alert-danger"><i class="fa-solid fa-triangle-exclamation"></i> <?php echo $err; ?></div><?php endif; ?>
+
+        <?php if ($is_admin): ?>
+            <!-- NÚT BẬT / TẮT CẤU HÌNH THÔNG TIN HỆ THỐNG -->
+            <button type="button" class="btn-toggle-box btn-toggle-settings" onclick="toggleSettingsSection()">
+                <span><i class="fa-solid fa-sliders mr-1"></i> CẤU HÌNH THÔNG TIN HỌC KỲ, CÁC BÉ & ẢNH KHỞI ĐỘNG</span>
+                <span id="settingsToggleIcon"><i class="fa-solid fa-chevron-down"></i> Mở ra</span>
+            </button>
+
+            <!-- 1. CẤU HÌNH THÔNG TIN HỌC KỲ, NĂM HỌC, 2 BÉ VÀ SPLASH SCREEN -->
+            <section id="settingsSectionBox" class="section-box" style="display: none; border-color: #cbd5e1;">
+                <div class="section-header">
+                    <h3 style="color: #4338ca;"><i class="fa-solid fa-gear"></i> Cấu Hình Hệ Thống & Giao Diện Khởi Động</h3>
+                </div>
+                <form method="POST">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 14px;">
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Học Kỳ</label>
+                            <input type="text" name="semester" class="form-control" value="<?php echo htmlspecialchars($settings['semester'] ?? 'HK1'); ?>" required>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Năm Học</label>
+                            <input type="text" name="school_year" class="form-control" value="<?php echo htmlspecialchars($settings['school_year'] ?? '2026-2027'); ?>" required>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#047857; display:block; margin-bottom:4px;">Tên Bé 1</label>
+                            <input type="text" name="kid1_name" class="form-control" value="<?php echo htmlspecialchars($settings['kid1_name'] ?? 'Trâm Anh'); ?>" required>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#047857; display:block; margin-bottom:4px;">Lớp Bé 1</label>
+                            <input type="text" name="kid1_class" class="form-control" value="<?php echo htmlspecialchars($settings['kid1_class'] ?? '6A3'); ?>" required>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#1d4ed8; display:block; margin-bottom:4px;">Tên Bé 2</label>
+                            <input type="text" name="kid2_name" class="form-control" value="<?php echo htmlspecialchars($settings['kid2_name'] ?? 'Thành Phát'); ?>" required>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#1d4ed8; display:block; margin-bottom:4px;">Lớp Bé 2</label>
+                            <input type="text" name="kid2_class" class="form-control" value="<?php echo htmlspecialchars($settings['kid2_class'] ?? '10A4'); ?>" required>
+                        </div>
+                    </div>
+
+                    <!-- Quản lý Logo / Ảnh khởi động (Splash Screen) -->
+                    <div style="border-top: 1.5px solid #e2e8f0; padding-top: 12px; margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#4338ca; display:block; margin-bottom:4px;"><i class="fa-solid fa-image"></i> URL Ảnh Logo / Khởi Động (Splash Image)</label>
+                            <input type="url" name="splash_img" class="form-control" value="<?php echo htmlspecialchars($settings['splash_img'] ?? 'https://thanhnhan.site/tkb/thoikhoabieu.png'); ?>" placeholder="https://..." required>
+                            <span style="font-size: 11px; color: #64748b; display: block; margin-top: 3px;">Đường dẫn ảnh hiển thị ở màn hình chào khi mở app.</span>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; font-weight:800; color:#4338ca; display:block; margin-bottom:4px;"><i class="fa-solid fa-quote-left"></i> Văn Bản Chào Khởi Động</label>
+                            <input type="text" name="splash_text" class="form-control" value="<?php echo htmlspecialchars($settings['splash_text'] ?? 'Đang tải thời khóa biểu...'); ?>" placeholder="Ví dụ: Đang tải thời khóa biểu..." required>
+                            <span style="font-size: 11px; color: #64748b; display: block; margin-top: 3px;">Dòng chữ phụ đề bên dưới logo khi khởi động.</span>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 16px;">
+                        <button type="submit" name="save_general_settings" class="btn-primary" style="background:#4338ca;">
+                            <i class="fa-solid fa-floppy-disk mr-1"></i> Lưu Cấu Hình Hệ Thống
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- CHUYỂN ĐỔI BÉ -->
+            <div class="admin-switcher">
+                <span style="font-size: 14px; font-weight: 800; white-space: nowrap;"><i class="fa-solid fa-sliders"></i> Quản lý cho:</span>
+                <a href="admin.php?be=1" data-be="1" class="switch-btn <?php echo $be_filter === '1' ? 'active' : ''; ?>">👧 Bé <?php echo htmlspecialchars($settings['kid1_name'] ?? 'Trâm Anh'); ?></a>
+                <a href="admin.php?be=2" data-be="2" class="switch-btn <?php echo $be_filter === '2' ? 'active' : ''; ?>">👦 Bé <?php echo htmlspecialchars($settings['kid2_name'] ?? 'Thành Phát'); ?></a>
+            </div>
+        <?php endif; ?>
+
+        <!-- NÚT BẬT / TẮT DANH SÁCH GIÁO VIÊN -->
+        <button type="button" class="btn-toggle-box btn-toggle-teacher" onclick="toggleTeacherSection()">
+            <span><i class="fa-solid fa-chalkboard-user mr-1"></i> DANH SÁCH GIÁO VIÊN (<?php echo count($teachers); ?> GIÁO VIÊN)</span>
+            <span id="teacherToggleIcon"><i class="fa-solid fa-chevron-down"></i> Mở ra</span>
+        </button>
+
+        <!-- 2. KHỐI QUẢN LÝ GIÁO VIÊN (MẶC ĐỊNH ẨN) -->
+        <section id="teacherSectionBox" class="section-box" style="display: none;">
+            <div class="section-header">
+                <h3><i class="fa-solid fa-address-book"></i> Danh Sách Giáo Viên (<?php echo $kid_names[$be_filter]; ?>)</h3>
+            </div>
+            
+            <form method="POST">
+                <input type="hidden" name="target_be" value="<?php echo $be_filter; ?>">
+                
+                <div class="teacher-form-flex">
+                    <div class="teacher-input-item">
+                        <label><i class="fa-solid fa-book-bookmark mr-1"></i> Môn Giảng Dạy *</label>
+                        <input type="text" name="subject_name" class="form-control" placeholder="Ví dụ: Toán, Văn..." required>
+                    </div>
+
+                    <div class="teacher-input-item">
+                        <label><i class="fa-solid fa-user-tie mr-1"></i> Họ và Tên Giáo Viên *</label>
+                        <input type="text" name="teacher_name" class="form-control" placeholder="Ví dụ: Thầy Hùng, Cô Lan..." required>
+                    </div>
+
+                    <div class="teacher-input-item">
+                        <label><i class="fa-solid fa-phone mr-1"></i> Số Điện Thoại</label>
+                        <input type="tel" name="phone" class="form-control" placeholder="09xxxxxxx">
+                    </div>
+
+                    <div class="teacher-input-item">
+                        <label><i class="fa-solid fa-clipboard mr-1"></i> Ghi Chú</label>
+                        <input type="text" name="note" class="form-control" placeholder="Chủ nhiệm, Zalo, địa chỉ...">
+                    </div>
+
+                    <div style="flex: 0 0 auto;">
+                        <button type="submit" name="add_teacher" class="btn-primary" style="height: 38px; display: inline-flex; align-items: center; justify-content: center; width: 100%;">
+                            <i class="fa-solid fa-plus mr-1"></i> Thêm Giáo Viên
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            <div class="teacher-table-responsive">
+                <table class="teacher-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Môn</th>
+                            <th style="width: 25%;">Tên Giáo Viên</th>
+                            <th style="width: 20%;">Số Điện Thoại</th>
+                            <th style="width: 25%;">Ghi Chú</th>
+                            <th style="width: 10%; text-align: center;">Thao Tác</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (!empty($teachers)): ?>
+                            <?php foreach ($teachers as $t): ?>
+                                <tr>
+                                    <td class="cell-sub"><?php echo htmlspecialchars($t['subject_name']); ?></td>
+                                    <td class="cell-name"><?php echo htmlspecialchars($t['teacher_name']); ?></td>
+                                    <td class="cell-phone">
+                                        <?php if (!empty($t['phone'])): ?>
+                                            <a href="tel:<?php echo htmlspecialchars($t['phone']); ?>">
+                                                <i class="fa-solid fa-phone-flip"></i> <?php echo htmlspecialchars($t['phone']); ?>
+                                            </a>
+                                        <?php else: ?>
+                                            <span style="color: #94a3b8; font-weight: 500;">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="cell-note"><?php echo !empty($t['note']) ? htmlspecialchars($t['note']) : '<span style="color: #94a3b8; font-weight: 500;">-</span>'; ?></td>
+                                    <td style="text-align: center;">
+                                        <div class="action-dropdown-wrapper">
+                                            <button type="button" class="btn-action-trigger" onclick="toggleDropdown(event, 'drop-t-<?php echo $t['id']; ?>')" title="Thao tác">
+                                                <i class="fa-solid fa-pen"></i>
+                                            </button>
+                                            <div id="drop-t-<?php echo $t['id']; ?>" class="action-dropdown-menu">
+                                                <button type="button" class="action-item" onclick='openEditModal(<?php echo json_encode($t, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>)'>
+                                                    <i class="fa-solid fa-pen-to-square" style="color: var(--kid-color);"></i> Sửa
+                                                </button>
+                                                <a href="admin.php?be=<?php echo $be_filter; ?>&del_teacher=<?php echo $t['id']; ?>" 
+                                                   class="action-item del" 
+                                                   onclick="return confirm('Xóa giáo viên <?php echo htmlspecialchars($t['teacher_name']); ?>?');">
+                                                    <i class="fa-solid fa-trash-can"></i> Xóa
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="5" style="text-align: center; color: #64748b; padding: 20px; font-weight: 700;">
+                                    Chưa có giáo viên nào trong danh sách.
+                                </td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 3. BẢNG MA TRẬN QUẢN LÝ TẤT CẢ LỊCH HỌC TRONG TUẦN -->
+        <section id="scheduleMatrixSection" class="section-box">
+            <div class="section-header">
+                <div>
+                    <h3><i class="fa-solid fa-calendar-days"></i> Lịch Học Toàn Tuần (<?php echo $kid_names[$be_filter]; ?>)</h3>
+                    <p style="font-size: 12px; color: #64748b; margin-top: 4px;">Tổng quan toàn bộ các thứ trong tuần. Thông tin môn học, giáo viên và ghi chú hiển thị theo chiều dọc trong từng tiết.</p>
+                </div>
+
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <!-- Nút Full Màn Hình -->
+                    <button type="button" id="btnFullscreenToggle" class="btn-sm btn-gray" onclick="toggleFullscreenMode()" title="Bật/Tắt chế độ toàn màn hình">
+                        <i class="fa-solid fa-expand" id="fullscreenIcon"></i> <span id="fullscreenText">Full màn hình</span>
+                    </button>
+
+                    <?php if (empty($schedules)): ?>
+                        <form method="POST">
+                            <input type="hidden" name="target_be" value="<?php echo $be_filter; ?>">
+                            <button type="submit" name="init_standard_slots" class="btn-sm btn-gray">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i> Tạo Khung Mẫu
+                            </button>
+                        </form>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <form method="POST">
+                <div class="matrix-table-responsive">
+                    <table class="matrix-table">
+                        <thead>
+                            <tr>
+                                <th class="col-tiet-info">Buổi & Khung Giờ</th>
+                                <?php foreach ($days_map as $d_key => $d_title): ?>
+                                    <th class="col-day-cell"><?php echo $d_title; ?></th>
+                                <?php endforeach; ?>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (!empty($schedules)): ?>
+                                <?php foreach ($schedules as $s): 
+                                    $badge_class = 'sang';
+                                    if ($s['buoi'] === 'CHIỀU') $badge_class = 'chieu';
+                                    if ($s['buoi'] === 'TỐI') $badge_class = 'toi';
+                                ?>
+                                    <tr>
+                                        <!-- Cột Buổi & Khung Giờ -->
+                                        <td class="col-tiet-info">
+                                            <span class="badge-buoi <?php echo $badge_class; ?>">
+                                                <?php echo htmlspecialchars($s['buoi']); ?>
+                                            </span>
+                                            <div style="font-size: 12px; font-weight: 800; color: var(--text-bold); margin-bottom: 6px;">
+                                                <?php echo htmlspecialchars($s['tiet']); ?>
+                                            </div>
+                                            <div class="action-cell-flex">
+                                                <!-- Nút Sửa Tên Tiết & Xóa -->
+                                                <div class="action-dropdown-wrapper">
+                                                    <button type="button" class="btn-action-trigger" onclick="toggleDropdown(event, 'drop-s-<?php echo $s['id']; ?>')" title="Thao tác tiết học">
+                                                        <i class="fa-solid fa-pen"></i>
+                                                    </button>
+                                                    <div id="drop-s-<?php echo $s['id']; ?>" class="action-dropdown-menu">
+                                                        <button type="button" class="action-item" onclick='openEditSlotModal(<?php echo json_encode($s, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>)'>
+                                                            <i class="fa-solid fa-pen-to-square" style="color: var(--kid-color);"></i> Đổi tên tiết
+                                                        </button>
+                                                        <a href="admin.php?be=<?php echo $be_filter; ?>&del_schedule=<?php echo $s['id']; ?>" 
+                                                           class="action-item del" 
+                                                           onclick="return confirm('Bạn có chắc chắn muốn xóa tiết học & khung giờ này?');">
+                                                            <i class="fa-solid fa-trash-can"></i> Xóa tiết
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                                <!-- Nút Mũi Tên Di Chuyển -->
+                                                <div class="move-btns">
+                                                    <a href="admin.php?be=<?php echo $be_filter; ?>&move=up&id=<?php echo $s['id']; ?>" class="btn-move" title="Di chuyển lên trên">
+                                                        <i class="fa-solid fa-arrow-up"></i>
+                                                    </a>
+                                                    <a href="admin.php?be=<?php echo $be_filter; ?>&move=down&id=<?php echo $s['id']; ?>" class="btn-move" title="Di chuyển xuống dưới">
+                                                        <i class="fa-solid fa-arrow-down"></i>
+                                                    </a>
+                                                </div>
+                                            </div>
+                                        </td>
+
+                                        <!-- Các Ô Nhập Liệu Theo Chiều Dọc Cho Từng Thứ -->
+                                        <?php foreach ($days_map as $d_key => $d_title): 
+                                            $raw = $s[$d_key] ?? '';
+                                            $parts = explode("\n", str_replace("\r", "", $raw));
+                                            $sub_val = trim($parts[0] ?? '');
+                                            $note_val = isset($parts[1]) ? trim(implode(' ', array_slice($parts, 1))) : '';
+                                            $linked_t_id = $s['t_' . $d_key] ?? null;
+                                            $has_sub = !empty($sub_val);
+                                            $select_id = 'tc_' . $s['id'] . '_' . $d_key;
+                                        ?>
+                                            <td class="col-day-cell">
+                                                <div class="slot-vertical-box">
+                                                    <!-- Môn Học -->
+                                                    <div>
+                                                        <label><i class="fa-solid fa-book mr-1"></i> Môn học:</label>
+                                                        <input type="text" 
+                                                               name="sched[<?php echo $s['id']; ?>][<?php echo $d_key; ?>][sub]" 
+                                                               value="<?php echo htmlspecialchars($sub_val); ?>" 
+                                                               class="form-control"
+                                                               placeholder="Trống"
+                                                               oninput="handleSubjectInput(this, '<?php echo $select_id; ?>')">
+                                                    </div>
+
+                                                    <!-- Giáo Viên -->
+                                                    <div>
+                                                        <label><i class="fa-solid fa-user-tie mr-1"></i> Giáo viên:</label>
+                                                        <select name="sched[<?php echo $s['id']; ?>][<?php echo $d_key; ?>][teacher]" 
+                                                                id="<?php echo $select_id; ?>" 
+                                                                class="form-control"
+                                                                <?php echo !$has_sub ? 'disabled' : ''; ?>>
+                                                            <option value="">-- Chọn giáo viên --</option>
+                                                            <?php foreach ($teachers as $tc): ?>
+                                                                <option value="<?php echo $tc['id']; ?>" <?php echo ($linked_t_id == $tc['id']) ? 'selected' : ''; ?>>
+                                                                    <?php echo htmlspecialchars($tc['teacher_name'] . ' (' . $tc['subject_name'] . ')'); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+
+                                                    <!-- Ghi Chú -->
+                                                    <div>
+                                                        <label><i class="fa-solid fa-note-sticky mr-1"></i> Ghi chú:</label>
+                                                        <input type="text" 
+                                                               name="sched[<?php echo $s['id']; ?>][<?php echo $d_key; ?>][note]" 
+                                                               value="<?php echo htmlspecialchars($note_val); ?>" 
+                                                               class="form-control" 
+                                                               placeholder="Ghi chú..."
+                                                               style="color: #92400e; background: #fffbeb;">
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        <?php endforeach; ?>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <tr>
+                                    <td colspan="8" style="text-align:center; padding: 25px; color:#64748b;">
+                                        Chưa có khung tiết nào. Hãy bấm nút <strong>"Tạo Khung Mẫu"</strong> ở trên để tự động sinh đủ tiết!
+                                    </td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <?php if (!empty($schedules)): ?>
+                    <div style="text-align: right; margin-top: 16px;">
+                        <button type="submit" name="save_all_schedule" class="btn-primary" style="padding: 12px 28px; font-size: 14px;">
+                            <i class="fa-solid fa-floppy-disk mr-1"></i> Lưu Lịch Học Toàn Tuần
+                        </button>
+                    </div>
+                <?php endif; ?>
+            </form>
+        </section>
+
+        <!-- 4. THÊM TIẾT / CA HỌC THÊM MỚI -->
+        <section class="section-box">
+            <div class="section-header">
+                <h3><i class="fa-solid fa-clock-medical"></i> Thêm Khung Tiết / Ca Học Thêm Mới</h3>
+            </div>
+            <form method="POST" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <input type="hidden" name="target_be" value="<?php echo $be_filter; ?>">
+                <select name="buoi" class="form-control" style="max-width: 140px;">
+                    <option value="SÁNG">Buổi SÁNG</option>
+                    <option value="CHIỀU">Buổi CHIỀU</option>
+                    <option value="TỐI" selected>Buổi TỐI</option>
+                </select>
+                <input type="text" name="tiet" class="form-control" placeholder="Ví dụ: Tiết 6 (11:35 - 12:15) hoặc Học bơi..." style="flex: 1; min-width: 260px;" required>
+                <button type="submit" name="add_lesson_row" class="btn-primary">
+                    <i class="fa-solid fa-plus mr-1"></i> Thêm Khung Giờ
+                </button>
+            </form>
+        </section>
+    </main>
+
+    <!-- MODAL SỬA THÔNG TIN KHUNG GIỜ / TIẾT HỌC -->
+    <div id="editSlotModal" class="edit-modal-overlay" onclick="closeEditSlotModal(event)">
+        <div class="edit-modal-content" onclick="event.stopPropagation()">
+            <div class="edit-modal-header">
+                <h4><i class="fa-solid fa-clock"></i> Chỉnh Sửa Khung Giờ / Tiết Học</h4>
+                <button type="button" style="background:none; border:none; font-size:20px; cursor:pointer; color:#64748b;" onclick="closeEditSlotModal()">&times;</button>
+            </div>
+            <form method="POST">
+                <input type="hidden" name="slot_id" id="edit_slot_id">
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                    <div>
+                        <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Buổi Học</label>
+                        <select name="edit_buoi" id="edit_slot_buoi" class="form-control" required>
+                            <option value="SÁNG">SÁNG</option>
+                            <option value="CHIỀU">CHIỀU</option>
+                            <option value="TỐI">TỐI</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Tên Tiết / Thời Gian</label>
+                        <input type="text" name="edit_tiet" id="edit_slot_tiet" class="form-control" required>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                        <button type="button" class="btn-sm btn-gray" onclick="closeEditSlotModal()">Hủy</button>
+                        <button type="submit" name="edit_slot_info" class="btn-primary">Lưu Thay Đổi</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL SỬA GIÁO VIÊN -->
+    <div id="editTeacherModal" class="edit-modal-overlay" onclick="closeEditModal(event)">
+        <div class="edit-modal-content" onclick="event.stopPropagation()">
+            <div class="edit-modal-header">
+                <h4><i class="fa-solid fa-pen-to-square"></i> Cập Nhật Giáo Viên</h4>
+                <button type="button" style="background:none; border:none; font-size:20px; cursor:pointer; color:#64748b;" onclick="closeEditModal()">&times;</button>
+            </div>
+            <form method="POST">
+                <input type="hidden" name="teacher_id" id="edit_teacher_id">
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                    <div>
+                        <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Tên Môn Học</label>
+                        <input type="text" name="subject_name" id="edit_subject_name" class="form-control" required>
+                    </div>
+                    <div>
+                        <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Tên Giáo Viên</label>
+                        <input type="text" name="teacher_name" id="edit_teacher_name" class="form-control" required>
+                    </div>
+                    <div>
+                        <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Số Điện Thoại</label>
+                        <input type="tel" name="phone" id="edit_phone" class="form-control">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; font-weight:800; color:#334155; display:block; margin-bottom:4px;">Ghi Chú</label>
+                        <input type="text" name="note" id="edit_note" class="form-control">
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                        <button type="button" class="btn-sm btn-gray" onclick="closeEditModal()">Hủy</button>
+                        <button type="submit" name="edit_teacher" class="btn-primary">Lưu Thay Đổi</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+    // Tự động giữ nguyên vị trí cuộn màn hình khi tải lại trang hoặc submit thao tác
+    window.addEventListener('scroll', function() {
+        sessionStorage.setItem('admin_scroll_y', window.scrollY);
+    });
+
+    window.addEventListener('DOMContentLoaded', function() {
+        const savedScroll = sessionStorage.getItem('admin_scroll_y');
+        if (savedScroll !== null) {
+            window.scrollTo({
+                top: parseInt(savedScroll, 10),
+                behavior: 'instant'
+            });
+        }
+    });
+
+    window.addEventListener('beforeunload', function() {
+        sessionStorage.setItem('admin_scroll_y', window.scrollY);
+    });
+
+    // Bật / tắt chế độ Full màn hình (chỉ hoạt động khi quay ngang màn hình)
+    function toggleFullscreenMode() {
+        const isFull = document.body.classList.toggle('fullscreen-mode');
+        const icon = document.getElementById('fullscreenIcon');
+        const text = document.getElementById('fullscreenText');
+
+        if (isFull) {
+            icon.className = "fa-solid fa-compress";
+            text.textContent = "Thoát full";
+        } else {
+            icon.className = "fa-solid fa-expand";
+            text.textContent = "Full màn hình";
+        }
+    }
+
+    // Bật / tắt hiển thị phần Cấu hình Hệ Thống
+    function toggleSettingsSection() {
+        const box = document.getElementById('settingsSectionBox');
+        const icon = document.getElementById('settingsToggleIcon');
+        if (box.style.display === 'none' || box.style.display === '') {
+            box.style.display = 'block';
+            icon.innerHTML = '<i class="fa-solid fa-chevron-up"></i> Thu gọn';
+        } else {
+            box.style.display = 'none';
+            icon.innerHTML = '<i class="fa-solid fa-chevron-down"></i> Mở ra';
+        }
+    }
+
+    // Bật / tắt hiển thị phần danh sách giáo viên
+    function toggleTeacherSection() {
+        const box = document.getElementById('teacherSectionBox');
+        const icon = document.getElementById('teacherToggleIcon');
+        if (box.style.display === 'none' || box.style.display === '') {
+            box.style.display = 'block';
+            icon.innerHTML = '<i class="fa-solid fa-chevron-up"></i> Thu gọn';
+        } else {
+            box.style.display = 'none';
+            icon.innerHTML = '<i class="fa-solid fa-chevron-down"></i> Mở ra';
+        }
+    }
+
+    function handleSubjectInput(inputEl, teacherSelectId) {
+        const teacherSelect = document.getElementById(teacherSelectId);
+        if (teacherSelect) {
+            if (inputEl.value.trim() === '') {
+                teacherSelect.value = '';
+                teacherSelect.disabled = true;
+            } else {
+                teacherSelect.disabled = false;
+            }
+        }
+    }
+
+    // Đóng mở menu cây bút
+    function toggleDropdown(event, dropdownId) {
+        event.stopPropagation();
+        const targetMenu = document.getElementById(dropdownId);
+        const isOpen = targetMenu.classList.contains('show');
+
+        document.querySelectorAll('.action-dropdown-menu').forEach(menu => {
+            menu.classList.remove('show');
+        });
+
+        if (!isOpen) {
+            targetMenu.classList.add('show');
+        }
+    }
+
+    // Bấm ra ngoài thì đóng các menu dropdown
+    document.addEventListener('click', function () {
+        document.querySelectorAll('.action-dropdown-menu').forEach(menu => {
+            menu.classList.remove('show');
+        });
+    });
+
+    // Xử lý modal sửa khung giờ / tiết học
+    function openEditSlotModal(slot) {
+        document.getElementById('edit_slot_id').value = slot.id;
+        document.getElementById('edit_slot_buoi').value = slot.buoi;
+        document.getElementById('edit_slot_tiet').value = slot.tiet;
+
+        document.querySelectorAll('.action-dropdown-menu').forEach(menu => menu.classList.remove('show'));
+        document.getElementById('editSlotModal').style.display = 'flex';
+    }
+
+    function closeEditSlotModal(event) {
+        if (!event || event.target.id === 'editSlotModal') {
+            document.getElementById('editSlotModal').style.display = 'none';
+        }
+    }
+
+    // Xử lý modal sửa giáo viên
+    function openEditModal(teacher) {
+        document.getElementById('edit_teacher_id').value = teacher.id;
+        document.getElementById('edit_subject_name').value = teacher.subject_name;
+        document.getElementById('edit_teacher_name').value = teacher.teacher_name;
+        document.getElementById('edit_phone').value = teacher.phone || '';
+        document.getElementById('edit_note').value = teacher.note || '';
+
+        document.querySelectorAll('.action-dropdown-menu').forEach(menu => menu.classList.remove('show'));
+        document.getElementById('editTeacherModal').style.display = 'flex';
+    }
+
+    function closeEditModal(event) {
+        if (!event || event.target.id === 'editTeacherModal') {
+            document.getElementById('editTeacherModal').style.display = 'none';
+        }
+    }
+    </script>
+</body>
+</html>
