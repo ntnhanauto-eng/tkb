@@ -1,0 +1,15 @@
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; padding: 20px; }
+.container { max-width: 1200px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+h1, h2 { text-align: center; color: #1a73e8; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+th, td { border: 1px solid #dee2e6; padding: 12px; text-align: center; font-size: 14px; }
+th { background-color: #1a73e8; color: white; }
+tr:nth-child(even) { background-color: #f8f9fa; }
+.buoi-col { font-weight: bold; background: #e8f0fe !important; width: 90px; }
+input[type="text"], select { width: 95%; padding: 6px; border: 1px solid #ddd; border-radius: 4px; }
+.btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; }
+.btn-save { background: #28a745; display: block; margin: 20px auto; width: 200px; }
+.btn-add { background: #17a2b8; margin-bottom: 10px; }
+.btn-login { background: #1a73e8; width: 100%; }
+.btn-delete { color: #dc3545; text-decoration: none; font-size: 20px; }
+.login-box { width: 350px; margin: 100px auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 5px 20px rgba(0,0,0,0.2); }
