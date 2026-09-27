@@ -175,7 +175,6 @@ try {
             $rows_notes = $stmt_notes->fetchAll(PDO::FETCH_ASSOC);
             $now_ms = time() * 1000;
             foreach ($rows_notes as $n) {
-                // Tự động bỏ qua nếu đã hết hạn
                 if ($n['expire_at'] > 0 && $now_ms > $n['expire_at']) {
                     $del_stmt = $conn->prepare("DELETE FROM daily_notes WHERE id = ?");
                     $del_stmt->execute([$n['id']]);
@@ -2604,13 +2603,10 @@ try {
                     data = {};
                 }
                 const now = Date.now();
-                let hasChange = false;
-
                 for (const key in data) {
                     if (data[key] && Array.isArray(data[key])) {
                         data[key] = data[key].filter(note => {
                             if (note.expireAt && note.expireAt > 0 && now > note.expireAt) {
-                                hasChange = true;
                                 return false;
                             }
                             return true;
@@ -2766,827 +2762,496 @@ try {
             renderAgenda();
         }
 
-        function getExamSchedules() {
-            try {
-                const raw = localStorage.getItem('tkb_exam_schedules');
-                return raw ? JSON.parse(raw) : [];
-            } catch (e) {
-                return [];
-            }
-        }
+        // --- RENDER AGENDA (DÒNG THỜI GIAN DỌC) ---
+        function renderAgenda() {
+            const container = document.getElementById('timelineStream');
+            if (!container) return;
 
-        async function syncExamSchedulesToCloud(exams) {
-            if (!navigator.onLine) return;
-            try {
-                await fetch('api.php?action=sync_exams', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ exams: exams })
-                });
-            } catch (e) {
-                console.log('Lưu lịch thi cloud ngầm: offline hoặc server bận');
-            }
-        }
-
-        function updateExamBadgeCount() {
-            const exams = getExamSchedules();
-            const now = new Date();
-            now.setHours(0, 0, 0, 0);
-
-            const upcomingExams = exams.filter(ex => {
-                if (!ex.exam_date) return false;
-                const d = new Date(ex.exam_date + 'T23:59:59');
-                return d >= now;
-            });
-
-            const badge = document.getElementById('examBadgeCount');
-            if (badge) {
-                if (upcomingExams.length > 0) {
-                    badge.innerText = upcomingExams.length;
-                    badge.style.display = 'flex';
-                } else {
-                    badge.style.display = 'none';
-                }
-            }
-        }
-
-        function switchExamTab(kidId) {
-            currentExamTab = kidId;
-            document.querySelectorAll('.exam-tab-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.getAttribute('data-kid') === kidId);
-            });
-            hideExamForm();
-            renderExamScheduleList();
-        }
-
-        function openExamScheduleModal() {
-            hideExamForm();
-            currentExamTab = (currentProfile === '2') ? '2' : '1';
-            switchExamTab(currentExamTab);
-            document.getElementById('examScheduleModal').style.display = 'flex';
-        }
-
-        function closeExamScheduleModal(e) {
-            if (!e || e.target.id === 'examScheduleModal') {
-                document.getElementById('examScheduleModal').style.display = 'none';
-            }
-        }
-
-        function showExamForm(editId = null) {
-            const box = document.getElementById('examFormBox');
-            const title = document.getElementById('examFormTitle');
-            document.getElementById('examFormPassword').value = '';
-            document.getElementById('examFormKidTarget').value = currentExamTab;
-
-            if (editId) {
-                const exams = getExamSchedules();
-                const item = exams.find(x => x.id === editId);
-                if (item) {
-                    title.innerText = 'Chỉnh Sửa Môn Thi';
-                    document.getElementById('examEditId').value = item.id;
-                    document.getElementById('examFormKidTarget').value = item.be_id || currentExamTab;
-                    document.getElementById('examFormTypeSelect').value = item.exam_type || 'gk';
-                    document.getElementById('examFormSubject').value = item.subject || '';
-                    document.getElementById('examFormDate').value = item.exam_date || '';
-                    document.getElementById('examFormTime').value = item.start_time || '';
-                    document.getElementById('examFormDuration').value = item.duration || '60';
-                    document.getElementById('examFormRoom').value = item.room || '';
-                    document.getElementById('examFormSbd').value = item.sbd || '';
-                    document.getElementById('examFormNotes').value = item.notes || '';
-                }
-            } else {
-                title.innerText = 'Nhập Môn Thi Mới';
-                document.getElementById('examEditId').value = '';
-                document.getElementById('examFormTypeSelect').value = 'gk';
-                document.getElementById('examFormSubject').value = '';
-                document.getElementById('examFormDate').value = '';
-                document.getElementById('examFormTime').value = '07:30';
-                document.getElementById('examFormDuration').value = '60';
-                document.getElementById('examFormRoom').value = '';
-                document.getElementById('examFormSbd').value = '';
-                document.getElementById('examFormNotes').value = '';
+            let list = scheduleData.filter(i => i.day === currentDay);
+            if (currentProfile !== 'all') {
+                list = list.filter(i => i.be_id === currentProfile);
             }
 
-            box.style.display = 'block';
-            box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-
-        function hideExamForm() {
-            document.getElementById('examFormBox').style.display = 'none';
-        }
-
-        function saveExamSchedule() {
-            const editId = document.getElementById('examEditId').value;
-            const kidId = document.getElementById('examFormKidTarget').value || currentExamTab;
-            const examType = document.getElementById('examFormTypeSelect').value;
-            const subject = document.getElementById('examFormSubject').value.trim();
-            const examDate = document.getElementById('examFormDate').value;
-            const startTime = document.getElementById('examFormTime').value;
-            const duration = document.getElementById('examFormDuration').value;
-            const room = document.getElementById('examFormRoom').value.trim();
-            const sbd = document.getElementById('examFormSbd').value.trim();
-            const notes = document.getElementById('examFormNotes').value.trim();
-            const enteredPass = document.getElementById('examFormPassword').value.trim();
-
-            if (!subject || !examDate || !startTime) {
-                alert('Vui lòng nhập đầy đủ: Tên môn, Ngày thi và Giờ thi!');
-                return;
-            }
-
-            if (!enteredPass) {
-                alert('Vui lòng nhập mật khẩu tài khoản của bé hoặc Admin để lưu!');
-                document.getElementById('examFormPassword').focus();
-                return;
-            }
-
-            if (!verifyKidOrAdminPassword(kidId, enteredPass)) {
-                alert('Mật khẩu không chính xác! Bạn phải nhập đúng mật khẩu của bé này hoặc mật khẩu Admin.');
-                document.getElementById('examFormPassword').focus();
-                return;
-            }
-
-            let exams = getExamSchedules();
-
-            if (editId) {
-                const idx = exams.findIndex(x => x.id === editId);
-                if (idx !== -1) {
-                    exams[idx] = {
-                        id: editId,
-                        be_id: kidId,
-                        exam_type: examType,
-                        subject: subject,
-                        exam_date: examDate,
-                        start_time: startTime,
-                        duration: duration,
-                        room: room,
-                        sbd: sbd,
-                        notes: notes
-                    };
-                }
-            } else {
-                exams.push({
-                    id: 'exam_' + Date.now(),
-                    be_id: kidId,
-                    exam_type: examType,
-                    subject: subject,
-                    exam_date: examDate,
-                    start_time: startTime,
-                    duration: duration,
-                    room: room,
-                    sbd: sbd,
-                    notes: notes
-                });
-            }
-
-            localStorage.setItem('tkb_exam_schedules', JSON.stringify(exams));
-            syncExamSchedulesToCloud(exams);
-            hideExamForm();
-            renderExamScheduleList();
-            updateExamBadgeCount();
-        }
-
-        function deleteExamSchedule(examId, kidId) {
-            const pass = prompt('Nhập mật khẩu của bé hoặc Admin để xóa môn thi này:');
-            if (!pass) return;
-
-            if (!verifyKidOrAdminPassword(kidId, pass.trim())) {
-                alert('Mật khẩu không chính xác! Không thể xóa lịch thi.');
-                return;
-            }
-
-            let exams = getExamSchedules();
-            exams = exams.filter(x => x.id !== examId);
-            localStorage.setItem('tkb_exam_schedules', JSON.stringify(exams));
-            syncExamSchedulesToCloud(exams);
-            renderExamScheduleList();
-            updateExamBadgeCount();
-        }
-
-        function renderExamScheduleList() {
-            const container = document.getElementById('examScheduleListContainer');
-            const subtitle = document.getElementById('examModalSubtitle');
-            let exams = getExamSchedules();
-
-            exams = exams.filter(x => x.be_id === currentExamTab);
-            const kidName = (currentExamTab === '2') ? (appSettings.kid2_name || 'Thành Phát') : (appSettings.kid1_name || 'Trâm Anh');
-            if (subtitle) subtitle.innerText = `Lịch thi của bé: ${kidName}`;
-
-            if (exams.length === 0) {
-                container.innerHTML = `<div style="font-size:12px; color:#94a3b8; text-align:center; padding:24px 10px;">Chưa có môn thi nào cho bé ${kidName}. Nhấn "+ Thêm môn thi" ở trên để tạo.</div>`;
-                return;
-            }
-
-            exams.sort((a, b) => {
-                const dateA = new Date(a.exam_date + 'T' + (a.start_time || '00:00'));
-                const dateB = new Date(b.exam_date + 'T' + (b.start_time || '00:00'));
-                return dateA - dateB;
-            });
-
-            const typeLabels = {
-                gk: '🏆 Thi Giữa kỳ',
-                hk: '🎯 Thi Cuối kỳ'
-            };
-
-            const now = new Date();
-            now.setHours(0, 0, 0, 0);
+            const dailyNotesMap = getDailyNotes();
+            const kidsToCheck = currentProfile === 'all' ? ['1', '2'] : [currentProfile];
 
             let html = '';
-            exams.forEach(item => {
-                let countdownStr = '';
-                if (item.exam_date) {
-                    const exDate = new Date(item.exam_date + 'T00:00:00');
-                    const diffDays = Math.ceil((exDate - now) / (1000 * 60 * 60 * 24));
-                    if (diffDays === 0) {
-                        countdownStr = '<span style="color:#ea580c; font-weight:800;">🔥 Hôm nay thi</span>';
-                    } else if (diffDays > 0) {
-                        countdownStr = `<span style="color:#059669; font-weight:800;">⏳ Còn ${diffDays} ngày</span>`;
-                    } else {
-                        countdownStr = '<span style="color:#94a3b8; font-weight:700;">Đã thi xong</span>';
-                    }
-                }
 
-                let formattedDate = item.exam_date;
-                if (item.exam_date) {
-                    const parts = item.exam_date.split('-');
-                    if (parts.length === 3) formattedDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
-                }
+            if (list.length === 0) {
+                html += `
+                    <div class="empty-state">
+                        <i class="fa-regular fa-face-smile" style="font-size: 32px; color: #94a3b8; margin-bottom: 8px;"></i>
+                        <div style="font-size: 13.5px; font-weight: 800; color: #475569;">Hôm nay không có lịch học!</div>
+                        <div style="font-size: 11.5px; color: #94a3b8; margin-top: 2px;">Chúc các bé có một ngày nghỉ ngơi vui vẻ.</div>
+                    </div>
+                `;
+            } else {
+                list.sort((a, b) => getItemStartMinutes(a) - getItemStartMinutes(b));
+
+                let currentBuoi = '';
+                const todoTags = getTodoTags();
+                const now = new Date();
+                const currentMinNow = now.getHours() * 60 + now.getMinutes();
+                const isTodayActive = (currentDay === realTodayKey);
+
+                list.forEach((item, index) => {
+                    if (item.buoi !== currentBuoi) {
+                        currentBuoi = item.buoi;
+                        html += `
+                            <div class="buoi-divider">
+                                <span class="buoi-pill"><i class="fa-solid fa-sun"></i> BUỔI ${currentBuoi}</span>
+                            </div>
+                        `;
+                    }
+
+                    const isKid1 = item.be_id === '1';
+                    const kidName = isKid1 ? (appSettings.kid1_name || 'Trâm Anh') : (appSettings.kid2_name || 'Thành Phát');
+                    const kidClass = isKid1 ? (appSettings.kid1_class || '6A3') : (appSettings.kid2_class || '10A4');
+                    const slot = parseSlotMinutes(item);
+                    const timeRangeStr = slot ? slot.timeRangeStr : getEstimatedTimeRange(item.buoi, item.tiet);
+                    const cleanTiet = (item.tiet || '').split('(')[0].trim();
+                    const cardDomId = `slot-card-${item.id}-${item.be_id}-${item.day}`;
+
+                    let isCurrentSlot = false;
+                    let isPastSlot = false;
+                    let progressPercent = 0;
+
+                    if (isTodayActive && slot) {
+                        if (currentMinNow >= slot.start && currentMinNow <= slot.end) {
+                            isCurrentSlot = true;
+                            let totalDuration = slot.end - slot.start;
+                            let elapsed = currentMinNow - slot.start;
+                            progressPercent = totalDuration > 0 ? Math.min(100, Math.max(0, (elapsed / totalDuration) * 100)) : 0;
+                        } else if (currentMinNow > slot.end) {
+                            isPastSlot = true;
+                        }
+                    }
+
+                    let cardClasses = 'subject-card';
+                    if (isCurrentSlot) cardClasses += ' is-current-slot';
+                    else if (isPastSlot) cardClasses += ' is-past-slot';
+
+                    const slotKey = `${item.id}_${item.be_id}_${item.day}`;
+                    const todoItem = todoTags[slotKey];
+
+                    const teacherObj = item.teacher;
+                    const teacherName = teacherObj ? teacherObj.teacher_name : '';
+
+                    html += `
+                        <div class="${cardClasses}" id="${cardDomId}">
+                            <div class="timeline-node"></div>
+                            <div class="card-top">
+                                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                    <span class="kid-tag ${isKid1 ? 'kid-tag-1' : 'kid-tag-2'}">
+                                        <i class="fa-solid fa-user-graduate"></i> ${kidName} (${kidClass})
+                                    </span>
+                                    ${isCurrentSlot ? '<span class="current-badge"><i class="fa-solid fa-bolt"></i> Đang học</span>' : ''}
+                                </div>
+                                <div class="time-box-right">
+                                    <span class="tiet-label">${cleanTiet}</span>
+                                    <span class="tiet-range"><i class="fa-regular fa-clock"></i> ${timeRangeStr}</span>
+                                </div>
+                            </div>
+
+                            <div class="subject-line-row">
+                                <div class="subject-title-link">
+                                    <i class="fa-solid fa-book-bookmark" style="color:var(--primary); font-size:14px;"></i> ${item.subject}
+                                </div>
+                                ${teacherName ? `
+                                    <button type="button" class="teacher-tag-btn" onclick="openSingleTeacherModalById('${teacherObj.id}')" title="Xem thông tin giáo viên">
+                                        <i class="fa-solid fa-chalkboard-user"></i> ${teacherName}
+                                    </button>
+                                ` : ''}
+                            </div>
+
+                            ${isCurrentSlot ? `
+                                <div class="live-progress-container">
+                                    <div class="live-progress-bar" style="width: ${progressPercent}%;"></div>
+                                </div>
+                                <div class="live-progress-label">
+                                    <span>Tiến độ tiết học</span>
+                                    <span>${Math.round(progressPercent)}%</span>
+                                </div>
+                            ` : ''}
+
+                            ${todoItem ? `
+                                <div class="custom-todo-badge todo-type-${todoItem.type || 'btvn'}" onclick="openTodoTagModal('${slotKey}', '${encodeURIComponent(item.subject)}', '${item.be_id}')">
+                                    <span><b>${getTodoTypeLabel(todoItem.type)}:</b> ${todoItem.content}</span>
+                                    <i class="fa-solid fa-pen-to-square"></i>
+                                </div>
+                            ` : (item.note ? `
+                                <div class="parent-note">
+                                    <i class="fa-solid fa-circle-info"></i>
+                                    <span><b>Ghi chú:</b> ${item.note}</span>
+                                </div>
+                            ` : '')}
+
+                            ${!todoItem ? `
+                                <button type="button" class="add-badge-btn" onclick="openTodoTagModal('${slotKey}', '${encodeURIComponent(item.subject)}', '${item.be_id}')">
+                                    <i class="fa-solid fa-plus"></i> Thêm nhắc nhở / BTVN
+                                </button>
+                            ` : ''}
+                        </div>
+                    `;
+                });
+            }
+
+            // Phần Ghi chú ngày ở dưới cùng (cách thẻ môn học cuối 24px)
+            html += `<div class="daily-note-section">`;
+            kidsToCheck.forEach(kId => {
+                const kName = (kId === '2') ? (appSettings.kid2_name || 'Thành Phát') : (appSettings.kid1_name || 'Trâm Anh');
+                const kClass = (kId === '2') ? (appSettings.kid2_class || '10A4') : (appSettings.kid1_class || '6A3');
+                const dateKey = `${currentDay}_${kId}`;
+                const notesList = dailyNotesMap[dateKey] || [];
 
                 html += `
-                    <div class="exam-card-item">
-                        <div class="exam-card-top">
+                    <div style="margin-bottom: 14px;">
+                        <div class="daily-note-header">
+                            <span style="color: ${kId === '1' ? '#047857' : '#1d4ed8'};">
+                                <i class="fa-solid fa-note-sticky"></i> Ghi chú ngày của bé ${kName} (${kClass})
+                            </span>
+                            ${notesList.length === 0 ? `
+                                <button type="button" class="add-badge-btn" onclick="openDailyNoteModal('${kId}')" title="Thêm ghi chú ngày">
+                                    <i class="fa-solid fa-plus"></i> Thêm ghi chú
+                                </button>
+                            ` : ''}
+                        </div>
+                `;
+
+                if (notesList.length > 0) {
+                    notesList.forEach(note => {
+                        html += `
+                            <div class="daily-note-item">
+                                <div class="daily-note-content">${note.content}</div>
+                                <div class="daily-note-actions">
+                                    <button type="button" class="add-badge-btn" onclick="openDailyNoteModal('${kId}', '${note.id}')" title="Sửa ghi chú">
+                                        <i class="fa-solid fa-pen"></i> Sửa
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+                html += `</div>`;
+            });
+            html += `</div>`;
+
+            container.innerHTML = html;
+        }
+
+        function getTodoTypeLabel(type) {
+            const map = {
+                btvn: 'Bài tập về nhà',
+                kt15: 'Kiểm tra 15 phút',
+                kt1t: 'Kiểm tra 1 tiết',
+                gk: 'Giữa kỳ',
+                hk: 'Thi học kỳ',
+                note: 'Lưu ý'
+            };
+            return map[type] || 'Nhắc nhở';
+        }
+
+        function openSingleTeacherModalById(teacherId) {
+            const t = teachersMap[teacherId];
+            if (!t) return;
+
+            const cleanPhone = pregReplacePhone(t.phone || '');
+            const body = document.getElementById('singleTeacherBody');
+            body.innerHTML = `
+                <div style="text-align:center; margin-bottom:14px;">
+                    <div style="width:50px; height:50px; border-radius:50%; background:var(--primary); color:white; font-size:20px; font-weight:800; display:flex; align-items:center; justify-content:center; margin:0 auto 8px;">
+                        ${(t.teacher_name || 'GV').charAt(0)}
+                    </div>
+                    <div style="font-size:16px; font-weight:800; color:#0f172a;">${t.teacher_name}</div>
+                    <div style="font-size:12px; color:var(--primary); font-weight:700; margin-top:2px;">Môn: ${t.subject_name}</div>
+                </div>
+
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:12px; margin-bottom:14px; font-size:12.5px;">
+                    <div style="margin-bottom:6px;"><b>Phụ trách bé:</b> ${t.be_name === '2' ? (appSettings.kid2_name || 'Thành Phát') : (appSettings.kid1_name || 'Trâm Anh')}</div>
+                    <div style="margin-bottom:6px;"><b>Số điện thoại:</b> ${t.phone ? t.phone : 'Chưa cập nhật'}</div>
+                </div>
+
+                ${t.phone ? `
+                    <div style="display:flex; gap:8px; justify-content:center;">
+                        <a href="tel:${t.phone}" class="t-call-btn" style="padding:8px 16px;"><i class="fa-solid fa-phone"></i> Gọi điện</a>
+                        <a href="https://zalo.me/${cleanPhone}" target="_blank" rel="noopener" class="t-zalo-btn" style="padding:8px 16px;"><i class="fa-solid fa-comment-dots"></i> Nhắn Zalo</a>
+                    </div>
+                ` : ''}
+            `;
+            document.getElementById('singleTeacherModal').style.display = 'flex';
+        }
+
+        function closeSingleTeacherModal(e) {
+            if (!e || e.target.id === 'singleTeacherModal') {
+                document.getElementById('singleTeacherModal').style.display = 'none';
+            }
+        }
+
+        function openAllTeachersModal() {
+            document.getElementById('allTeachersModal').style.display = 'flex';
+        }
+
+        function closeAllTeachersModal(e) {
+            if (!e || e.target.id === 'allTeachersModal') {
+                document.getElementById('allTeachersModal').style.display = 'none';
+            }
+        }
+
+        function pregReplacePhone(phone) {
+            return String(phone).replace(/[^0-9]/g, '');
+        }
+
+        function openSubjectSummaryModal() {
+            const body = document.getElementById('subjectSummaryBody');
+            let list = scheduleData;
+            if (currentProfile !== 'all') {
+                list = list.filter(i => i.be_id === currentProfile);
+            }
+
+            let countsKid1 = {};
+            let countsKid2 = {};
+
+            list.forEach(item => {
+                const sub = item.subject || 'Khác';
+                if (item.be_id === '1') {
+                    countsKid1[sub] = (countsKid1[sub] || 0) + 1;
+                } else {
+                    countsKid2[sub] = (countsKid2[sub] || 0) + 1;
+                }
+            });
+
+            let html = '';
+
+            if (currentProfile === 'all' || currentProfile === '1') {
+                html += `<div class="summary-kid-title" style="color:#047857;"><i class="fa-solid fa-child-reaching"></i> Bé ${appSettings.kid1_name || 'Trâm Anh'} (${appSettings.kid1_class || '6A3'})</div>`;
+                const keys1 = Object.keys(countsKid1);
+                if (keys1.length === 0) {
+                    html += '<div style="font-size:11.5px; color:#94a3b8;">Chưa có tiết học.</div>';
+                } else {
+                    html += '<div class="summary-grid">';
+                    keys1.forEach(sub => {
+                        html += `<div class="summary-card"><span class="s-name">${sub}</span><span class="s-count">${countsKid1[sub]} tiết</span></div>`;
+                    });
+                    html += '</div>';
+                }
+            }
+
+            if (currentProfile === 'all' || currentProfile === '2') {
+                html += `<div class="summary-kid-title" style="color:#1d4ed8;"><i class="fa-solid fa-child-reaching"></i> Bé ${appSettings.kid2_name || 'Thành Phát'} (${appSettings.kid2_class || '10A4'})</div>`;
+                const keys2 = Object.keys(countsKid2);
+                if (keys2.length === 0) {
+                    html += '<div style="font-size:11.5px; color:#94a3b8;">Chưa có tiết học.</div>';
+                } else {
+                    html += '<div class="summary-grid">';
+                    keys2.forEach(sub => {
+                        html += `<div class="summary-card"><span class="s-name">${sub}</span><span class="s-count">${countsKid2[sub]} tiết</span></div>`;
+                    });
+                    html += '</div>';
+                }
+            }
+
+            body.innerHTML = html;
+            document.getElementById('subjectSummaryModal').style.display = 'flex';
+        }
+
+        function closeSubjectSummaryModal(e) {
+            if (!e || e.target.id === 'subjectSummaryModal') {
+                document.getElementById('subjectSummaryModal').style.display = 'none';
+            }
+        }
+
+        function updateDynamicWidget() {
+            const container = document.getElementById('widgetItemsContainer');
+            if (!container) return;
+
+            let list = scheduleData.filter(i => i.day === currentDay);
+            if (currentProfile !== 'all') {
+                list = list.filter(i => i.be_id === currentProfile);
+            }
+
+            if (list.length === 0) {
+                container.innerHTML = `
+                    <div class="widget-item">
+                        <div class="widget-left">
+                            <div class="widget-icon"><i class="fa-solid fa-mug-hot" style="color:#fbbf24;"></i></div>
                             <div>
-                                <span class="exam-type-badge exam-type-${item.exam_type || 'gk'}">${typeLabels[item.exam_type] || 'Thi'}</span>
+                                <div class="widget-status-badge" style="background:rgba(251,191,36,0.2); color:#fde68a;">Trống lịch</div>
+                                <div class="widget-subject">Không có tiết học</div>
                             </div>
-                            <div style="font-size:11px;">${countdownStr}</div>
                         </div>
+                    </div>
+                `;
+                return;
+            }
 
-                        <div class="exam-sub-title">${item.subject}</div>
+            list.sort((a, b) => getItemStartMinutes(a) - getItemStartMinutes(b));
 
-                        <div class="exam-meta-line">
-                            <span><i class="fa-regular fa-calendar-days"></i> ${formattedDate}</span>
-                            <span><i class="fa-regular fa-clock"></i> ${item.start_time || ''} (${item.duration || 60}p)</span>
-                            ${item.room ? `<span><i class="fa-solid fa-door-open"></i> Phòng: ${item.room}</span>` : ''}
-                            ${item.sbd ? `<span><i class="fa-solid fa-id-card"></i> SBD: ${item.sbd}</span>` : ''}
+            const now = new Date();
+            const currentMinNow = now.getHours() * 60 + now.getMinutes();
+            const isTodayActive = (currentDay === realTodayKey);
+
+            let activeOrUpcoming = null;
+
+            if (isTodayActive) {
+                for (let i = 0; i < list.length; i++) {
+                    let slot = parseSlotMinutes(list[i]);
+                    if (slot && currentMinNow <= slot.end) {
+                        activeOrUpcoming = list[i];
+                        break;
+                    }
+                }
+            }
+
+            if (!activeOrUpcoming) {
+                activeOrUpcoming = list[0];
+            }
+
+            const isKid1 = activeOrUpcoming.be_id === '1';
+            const kidName = isKid1 ? (appSettings.kid1_name || 'Trâm Anh') : (appSettings.kid2_name || 'Thành Phát');
+            const slot = parseSlotMinutes(activeOrUpcoming);
+            const timeRangeStr = slot ? slot.timeRangeStr : getEstimatedTimeRange(activeOrUpcoming.buoi, activeOrUpcoming.tiet);
+            const cleanTiet = (activeOrUpcoming.tiet || '').split('(')[0].trim();
+            const cardDomId = `slot-card-${activeOrUpcoming.id}-${activeOrUpcoming.be_id}-${activeOrUpcoming.day}`;
+
+            let badgeHtml = `<span class="widget-status-badge" style="background:rgba(99,102,241,0.25); color:#c7d2fe;">Môn học trong ngày</span>`;
+            if (isTodayActive && slot) {
+                if (currentMinNow >= slot.start && currentMinNow <= slot.end) {
+                    badgeHtml = `<span class="widget-status-badge" style="background:rgba(234,88,12,0.25); color:#fdba74;"><i class="fa-solid fa-bolt"></i> Đang diễn ra</span>`;
+                } else if (currentMinNow < slot.start) {
+                    badgeHtml = `<span class="widget-status-badge" style="background:rgba(16,185,129,0.25); color:#6ee7b7;"><i class="fa-solid fa-clock"></i> Sắp diễn ra</span>`;
+                } else {
+                    badgeHtml = `<span class="widget-status-badge" style="background:rgba(100,116,139,0.3); color:#cbd5e1;">Đã qua</span>`;
+                }
+            }
+
+            container.innerHTML = `
+                <div class="widget-item clickable" onclick="jumpToSubjectFromSearch('${activeOrUpcoming.day}', '${cardDomId}')">
+                    <div class="widget-left">
+                        <div class="widget-icon" style="color: ${isKid1 ? '#34d399' : '#60a5fa'};">
+                            <i class="fa-solid fa-book-open-reader"></i>
                         </div>
+                        <div>
+                            ${badgeHtml}
+                            <div class="widget-subject">${activeOrUpcoming.subject}</div>
+                        </div>
+                    </div>
+                    <div class="widget-right">
+                        <div class="widget-child" style="color: ${isKid1 ? '#34d399' : '#60a5fa'};">${kidName} (${cleanTiet})</div>
+                        <div class="widget-time">${timeRangeStr}</div>
+                    </div>
+                </div>
+            `;
+        }
 
-                        ${item.notes ? `
-                            <div class="exam-note-box">
-                                <i class="fa-solid fa-triangle-exclamation"></i> <b>Cần mang:</b> ${item.notes}
+        function renderLandscapeGrid() {
+            const container = document.getElementById('landscapeGridContainer');
+            if (!container) return;
+
+            let list = scheduleData;
+            if (currentProfile !== 'all') {
+                list = list.filter(i => i.be_id === currentProfile);
+            }
+
+            const sessions = ['SÁNG', 'CHIỀU'];
+            let html = '';
+
+            sessions.forEach(buoi => {
+                let buoiList = list.filter(i => (i.buoi || '').toUpperCase().includes(buoi));
+                if (buoiList.length === 0) return;
+
+                let titleBuoi = buoi === 'SÁNG' ? 'BUỔI SÁNG' : 'BUỔI CHIỀU';
+
+                html += `
+                    <div class="landscape-table-card" id="printCard_${buoi}">
+                        <div class="landscape-card-header">
+                            <div class="landscape-title">
+                                <i class="fa-solid fa-calendar-days" style="color:var(--primary);"></i> Lịch ${titleBuoi}
                             </div>
-                        ` : ''}
+                            <button type="button" class="print-tkb-btn" onclick="printSingleTable('printCard_${buoi}')">
+                                <i class="fa-solid fa-print"></i> In lịch ${titleBuoi}
+                            </button>
+                        </div>
+                        <div class="landscape-table-wrapper">
+                            <table class="landscape-table">
+                                <thead>
+                                    <tr>
+                                        <th class="col-buoi">Buổi</th>
+                                        <th class="col-tiet">Tiết / Giờ</th>
+                                        <th class="col-day-header">Thứ 2</th>
+                                        <th class="col-day-header">Thứ 3</th>
+                                        <th class="col-day-header">Thứ 4</th>
+                                        <th class="col-day-header">Thứ 5</th>
+                                        <th class="col-day-header">Thứ 6</th>
+                                        <th class="col-day-header">Thứ 7</th>
+                                        <th class="col-day-header">Chủ Nhật</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                `;
 
-                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px; padding-top:6px; border-top:1px solid #f1f5f9;">
-                            <button type="button" onclick="showExamForm('${item.id}')" style="background:none; border:none; color:var(--primary); font-size:11px; font-weight:700; cursor:pointer;">
-                                <i class="fa-solid fa-pen"></i> Sửa
-                            </button>
-                            <button type="button" onclick="deleteExamSchedule('${item.id}', '${item.be_id}')" style="background:none; border:none; color:#dc2626; font-size:11px; font-weight:700; cursor:pointer;">
-                                <i class="fa-solid fa-trash-can"></i> Xóa
-                            </button>
+                const tiets = buoi === 'SÁNG' ? ['Tiết 1', 'Tiết 2', 'Tiết 3', 'Tiết 4', 'Tiết 5'] : ['Tiết 1', 'Tiết 2', 'Tiết 3', 'Tiết 4', 'Tiết 5'];
+
+                tiets.forEach((tietName, idx) => {
+                    html += `
+                        <tr>
+                            ${idx === 0 ? `<td class="col-buoi" rowspan="${tiets.length}">${buoi}</td>` : ''}
+                            <td class="col-tiet landscape-time-col-cell">
+                                <div style="font-weight:800;">${tietName}</div>
+                                <div style="font-size:9.5px; color:#64748b; font-weight:700;">${getEstimatedTimeRange(buoi, tietName)}</div>
+                            </td>
+                    `;
+
+                    daysKeysList.forEach(dk => {
+                        let cellItem = buoiList.find(i => i.day === dk && (i.tiet || '').includes(String(idx + 1)));
+                        html += `<td style="height:70px; position:relative;"><div class="landscape-day-track">`;
+                        if (cellItem) {
+                            const isKid1 = cellItem.be_id === '1';
+                            const subBoxId = `gridbox-${cellItem.id}-${cellItem.be_id}-${dk}`;
+                            const teacherStr = (cellItem.teacher && cellItem.teacher.teacher_name) ? cellItem.teacher.teacher_name : '';
+                            html += `
+                                <div class="grid-sub-box" id="${subBoxId}" onclick="jumpToSubjectFromSearch('${dk}', 'slot-card-${cellItem.id}-${cellItem.be_id}-${dk}')" style="top:3px; bottom:3px;">
+                                    <div class="grid-sub-title">${cellItem.subject}</div>
+                                    ${teacherStr ? `<div class="grid-sub-teacher">${teacherStr}</div>` : ''}
+                                    ${cellItem.note ? `<div class="grid-sub-note">${cellItem.note}</div>` : ''}
+                                </div>
+                            `;
+                        }
+                        html += `</div></td>`;
+                    });
+
+                    html += `</tr>`;
+                });
+
+                html += `
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 `;
             });
 
-            container.innerHTML = html;
+            container.innerHTML = html || '<div style="text-align:center; padding:20px; color:#94a3b8;">Không có dữ liệu thời khóa biểu dạng lưới.</div>';
         }
 
-        let isSpeaking = false;
-
-        function toggleVoiceSpeech() {
-            if (!('speechSynthesis' in window)) {
-                alert('Rất tiếc, trình duyệt của bạn không hỗ trợ tính năng đọc bằng giọng nói.');
-                return;
-            }
-
-            if (isSpeaking) {
-                window.speechSynthesis.cancel();
-                setSpeakingUI(false);
-                return;
-            }
-
-            const speechText = generateDailySpeechText();
-            if (!speechText) {
-                alert('Không có dữ liệu thời khóa biểu để đọc.');
-                return;
-            }
-
-            window.speechSynthesis.cancel();
-
-            const utterance = new SpeechSynthesisUtterance(speechText);
-            utterance.lang = 'vi-VN';
-            utterance.rate = 1.0;
-            utterance.pitch = 1.0;
-
-            const voices = window.speechSynthesis.getVoices();
-            const viVoice = voices.find(v => v.lang.includes('vi') || v.lang.includes('VIE'));
-            if (viVoice) {
-                utterance.voice = viVoice;
-            }
-
-            utterance.onstart = () => {
-                setSpeakingUI(true);
-            };
-
-            utterance.onend = () => {
-                setSpeakingUI(false);
-            };
-
-            utterance.onerror = () => {
-                setSpeakingUI(false);
-            };
-
-            window.speechSynthesis.speak(utterance);
-        }
-
-        function setSpeakingUI(speaking) {
-            isSpeaking = speaking;
-            const btn = document.getElementById('voiceAssistantBtn');
-            const icon = document.getElementById('voiceIcon');
-            const txt = document.getElementById('voiceBtnText');
-
-            if (!btn || !icon || !txt) return;
-
-            if (speaking) {
-                btn.classList.add('is-speaking');
-                icon.className = 'fa-solid fa-circle-stop';
-                txt.innerText = 'Dừng đọc';
-            } else {
-                btn.classList.remove('is-speaking');
-                icon.className = 'fa-solid fa-volume-high';
-                txt.innerText = 'Đọc lịch';
-            }
-        }
-
-        function generateDailySpeechText() {
-            const dayInfo = weekDates[currentDay] || {};
-            let list = scheduleData.filter(i => i.day === currentDay);
-            const todoTags = getTodoTags();
-
-            if (list.length === 0) {
-                return `${dayInfo.full_name || ''}, ngày ${dayInfo.date || ''} tháng ${dayInfo.month || ''}. Hôm nay không có lịch học. Chúc các bé nghỉ ngơi vui vẻ!`;
-            }
-
-            let text = `Thời khóa biểu ${dayInfo.full_name || ''}, ngày ${dayInfo.date || ''} tháng ${dayInfo.month || ''}. `;
-
-            const readForKid = (kId) => {
-                const isKid1 = (kId === '1');
-                const kidName = isKid1 ? (appSettings.kid1_name || 'Trâm Anh') : (appSettings.kid2_name || 'Thành Phát');
-                let kidList = list.filter(i => i.be_id === kId);
-
-                if (kidList.length === 0) {
-                    return `Bé ${kidName} hôm nay không có tiết học nào. `;
-                }
-
-                kidList.sort((a, b) => getItemStartMinutes(a) - getItemStartMinutes(b));
-
-                let kidText = `Lịch học của bé ${kidName} có ${kidList.length} tiết: `;
-
-                let buoiGroups = {};
-                kidList.forEach(item => {
-                    let b = item.buoi || 'SÁNG';
-                    if (!buoiGroups[b]) buoiGroups[b] = [];
-                    buoiGroups[b].push(item);
-                });
-
-                for (let b in buoiGroups) {
-                    kidText += `Buổi ${b.toLowerCase()}: `;
-                    buoiGroups[b].forEach(item => {
-                        const cleanTiet = (item.tiet || '').split('(')[0].trim();
-                        const slot = parseSlotMinutes(item);
-                        const timeStartStr = slot ? slot.timeRangeStr.split('-')[0].trim() : '';
-
-                        kidText += `${cleanTiet} môn ${item.subject} lúc ${timeStartStr}. `;
-
-                        const slotKey = `${item.id}_${item.be_id}_${item.day}`;
-                        if (todoTags[slotKey]) {
-                            kidText += `Lưu ý có ${todoTags[slotKey].content}. `;
-                        } else if (item.note) {
-                            kidText += `Ghi chú: ${item.note}. `;
-                        }
-                    });
-                }
-                return kidText;
-            };
-
-            if (currentProfile === 'all') {
-                text += readForKid('1') + ' ' + readForKid('2');
-            } else {
-                text += readForKid(currentProfile);
-            }
-
-            return text;
-        }
-
-        if ('speechSynthesis' in window) {
-            window.speechSynthesis.onvoiceschanged = () => {
-                window.speechSynthesis.getVoices();
-            };
-        }
-
-        function saveToOfflineStorage() {
-            try {
-                localStorage.setItem('tkb_offline_scheduleData', JSON.stringify(scheduleData));
-                localStorage.setItem('tkb_offline_rawSchedules', JSON.stringify(rawSchedules));
-                localStorage.setItem('tkb_offline_teachersMap', JSON.stringify(teachersMap));
-                localStorage.setItem('tkb_offline_appSettings', JSON.stringify(appSettings));
-            } catch (e) {
-                console.warn('Không thể ghi vào localStorage:', e);
-            }
-        }
-
-        function loadFromOfflineStorage() {
-            try {
-                const sData = localStorage.getItem('tkb_offline_scheduleData');
-                const rData = localStorage.getItem('tkb_offline_rawSchedules');
-                const tData = localStorage.getItem('tkb_offline_teachersMap');
-                const setts = localStorage.getItem('tkb_offline_appSettings');
-
-                if (sData) scheduleData = JSON.parse(sData);
-                if (rData) rawSchedules = JSON.parse(rData);
-                if (tData) teachersMap = JSON.parse(tData);
-                if (setts) {
-                    appSettings = Object.assign({}, appSettings, JSON.parse(setts));
-                    updateHeaderNames();
-                }
-            } catch (e) {
-                console.warn('Không thể đọc từ localStorage:', e);
-            }
-        }
-
-        function updateHeaderNames() {
-            if (document.getElementById('kid1NameNav')) {
-                document.getElementById('kid1NameNav').innerText = appSettings.kid1_name || 'Trâm Anh';
-                document.getElementById('kid1ClassNav').innerText = 'Lớp ' + (appSettings.kid1_class || '6A3');
-            }
-            if (document.getElementById('kid2NameNav')) {
-                document.getElementById('kid2NameNav').innerText = appSettings.kid2_name || 'Thành Phát';
-                document.getElementById('kid2ClassNav').innerText = 'Lớp ' + (appSettings.kid2_class || '10A4');
-            }
-        }
-
-        if (!scheduleData || scheduleData.length === 0) {
-            loadFromOfflineStorage();
-        } else {
-            saveToOfflineStorage();
-        }
-
-        let toastTimeout = null;
-        function showNetworkToast(type, message) {
-            const toast = document.getElementById('networkToast');
-            const icon = document.getElementById('networkToastIcon');
-            const msg = document.getElementById('networkToastMsg');
-
-            if (!toast || !icon || !msg) return;
-
-            if (toastTimeout) clearTimeout(toastTimeout);
-
-            toast.className = 'network-toast ' + (type === 'online' ? 'toast-online' : 'toast-offline');
-            icon.className = 'fa-solid ' + (type === 'online' ? 'fa-wifi' : 'fa-plane');
-            msg.innerText = message;
-
-            toast.classList.add('show');
-
-            toastTimeout = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 3000);
-        }
-
-        window.addEventListener('offline', () => {
-            showNetworkToast('offline', 'Mất kết nối mạng - Đang xem Offline');
-        });
-
-        window.addEventListener('online', () => {
-            showNetworkToast('online', 'Đã kết nối lại trực tuyến');
-            syncDataFromServer();
-        });
-
-        function getEstimatedTimeRange(buoi, tiet) {
-            const num = parseInt((tiet || '').replace(/\D/g, '')) || 1;
-            const b = (buoi || '').trim().toUpperCase();
-            if (b.includes('SÁNG') || b.includes('SANG')) {
-                const times = ['07:15 - 08:00', '08:05 - 08:50', '09:05 - 09:50', '10:00 - 10:45', '10:50 - 11:35'];
-                return times[num - 1] || '07:30 - 11:15';
-            } else if (b.includes('CHIỀU') || b.includes('CHIEU')) {
-                const times = ['13:30 - 14:15', '14:20 - 15:05', '15:20 - 16:05', '16:10 - 16:55', '17:00 - 17:45'];
-                return times[num - 1] || '13:30 - 17:00';
-            }
-            return '18:00 - 19:30';
-        }
-
-        function timeToMinutes(h, m) {
-            return parseInt(h, 10) * 60 + parseInt(m, 10);
-        }
-
-        function parseSlotMinutes(item) {
-            const customText = (item.note || '') + ' ' + (item.subject || '');
-            let match = customText.match(/(\d{1,2})[:hH](\d{2})\s*[\u2010-\u2015~-]\s*(\d{1,2})[:hH](\d{2})/);
-
-            if (!match) {
-                match = (item.tiet || '').match(/(\d{1,2})[:hH](\d{2})\s*[\u2010-\u2015~-]\s*(\d{1,2})[:hH](\d{2})/);
-            }
-
-            if (!match) {
-                const defaultRange = getEstimatedTimeRange(item.buoi, item.tiet);
-                match = defaultRange.match(/(\d{1,2})[:hH](\d{2})\s*[~-]\s*(\d{1,2})[:hH](\d{2})/);
-            }
-
-            if (match) {
-                let start = timeToMinutes(match[1], match[2]);
-                let end = timeToMinutes(match[3], match[4]);
-                let timeRangeStr = match[1].padStart(2, '0') + ':' + match[2] + ' - ' + match[3].padStart(2, '0') + ':' + match[4];
-                return { start, end, timeRangeStr };
-            }
-
-            return null;
-        }
-
-        function getItemStartMinutes(item) {
-            const slot = parseSlotMinutes(item);
-            if (slot) return slot.start;
-
-            const b = (item.buoi || '').trim().toUpperCase();
-            let base = 7 * 60;
-            if (b.includes('CHIỀU') || b.includes('CHIEU')) {
-                base = 13 * 60 + 30;
-            } else if (b.includes('TỐI') || b.includes('TOI')) {
-                base = 18 * 60;
-            }
-
-            const match = (item.tiet || '').match(/(?:tiết\s*|^)(\d+)/i);
-            const num = match ? parseInt(match[1]) : 1;
-            return base + (num - 1) * 50;
-        }
-
-        function changeProfile(profile) {
-            currentProfile = profile;
-            document.querySelectorAll('.profile-pill').forEach(el => el.classList.toggle('active', el.getAttribute('data-target') === profile));
-            document.documentElement.style.setProperty('--active-theme-color', profileColors[profile] || profileColors['all']);
-            renderAgenda();
-            updateDynamicWidget();
-            renderLandscapeGrid();
-            checkRainAlert();
-
-            if (isSpeaking) {
-                window.speechSynthesis.cancel();
-                setSpeakingUI(false);
-            }
-        }
-
-        function changeDay(dayKey) {
-            currentDay = dayKey;
-            document.querySelectorAll('.date-item').forEach(el => el.classList.toggle('active', el.getAttribute('data-day') === dayKey));
-
-            const activeChip = document.getElementById('chip-' + dayKey);
-            if (activeChip) {
-                activeChip.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-            }
-
-            renderAgenda();
-            updateDynamicWidget();
-            checkRainAlert();
-
-            if (isSpeaking) {
-                window.speechSynthesis.cancel();
-                setSpeakingUI(false);
-            }
-        }
-
-        function goToToday() {
-            refreshRealTimeDates();
-            changeDay(realTodayKey);
-        }
-
-        let touchStartX = 0;
-        let touchStartY = 0;
-        let touchEndX = 0;
-        let touchEndY = 0;
-
-        document.addEventListener('touchstart', function(e) {
-            if (e.touches && e.touches.length > 1) {
-                touchStartX = 0;
-                touchStartY = 0;
-                return;
-            }
-
-            if (window.matchMedia("(orientation: landscape)").matches || window.innerWidth >= 1024 || e.target.closest('#dateStrip') || e.target.closest('.modal-content') || e.target.closest('#landscapeGridSection')) {
-                touchStartX = 0;
-                touchStartY = 0;
-                return;
-            }
-            touchStartX = e.changedTouches[0].screenX;
-            touchStartY = e.changedTouches[0].screenY;
-        }, { passive: true });
-
-        document.addEventListener('touchend', function(e) {
-            if (!touchStartX && !touchStartY) return;
-            if (e.touches && e.touches.length > 0) return;
-
-            touchEndX = e.changedTouches[0].screenX;
-            touchEndY = e.changedTouches[0].screenY;
-            handleGlobalGesture();
-            touchStartX = 0;
-            touchStartY = 0;
-        }, { passive: true });
-
-        function handleGlobalGesture() {
-            const diffX = touchEndX - touchStartX;
-            const diffY = touchEndY - touchStartY;
-
-            if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 45) {
-                const currentIndex = daysKeysList.indexOf(currentDay);
-                if (diffX < 0) {
-                    if (currentIndex < daysKeysList.length - 1) {
-                        changeDay(daysKeysList[currentIndex + 1]);
-                    }
-                } else {
-                    if (currentIndex > 0) {
-                        changeDay(daysKeysList[currentIndex - 1]);
-                    }
-                }
-            }
-        }
-
-        function toggleFullscreen() {
-            const icon = document.getElementById('fullScreenIcon');
-            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                const docEl = document.documentElement;
-                if (docEl.requestFullscreen) {
-                    docEl.requestFullscreen().catch(() => {});
-                } else if (docEl.webkitRequestFullscreen) {
-                    docEl.webkitRequestFullscreen();
-                }
-                if (icon) icon.className = 'fa-solid fa-compress';
-            } else {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen().catch(() => {});
-                } else if (document.webkitExitFullscreen) {
-                    document.webkitExitFullscreen();
-                }
-                if (icon) icon.className = 'fa-solid fa-expand';
-            }
-        }
-
-        document.addEventListener('fullscreenchange', () => {
-            const icon = document.getElementById('fullScreenIcon');
-            if (icon) {
-                icon.className = document.fullscreenElement ? 'fa-solid fa-compress' : 'fa-solid fa-expand';
-            }
-        });
-
-        function applyPcViewMode(mode) {
-            const icon = document.getElementById('pcViewToggleIcon');
-            const text = document.getElementById('pcViewToggleText');
-            if (mode === 'agenda') {
-                document.body.classList.remove('pc-mode-grid');
-                document.body.classList.add('pc-mode-agenda');
-                if (icon) icon.className = 'fa-solid fa-table-cells';
-                if (text) text.innerText = 'Chế độ lưới trên PC';
-            } else {
-                document.body.classList.remove('pc-mode-agenda');
-                document.body.classList.add('pc-mode-grid');
-                if (icon) icon.className = 'fa-solid fa-mobile-screen';
-                if (text) text.innerText = 'Chế độ di động trên PC';
-            }
-            localStorage.setItem('tkb_pc_view_mode', mode);
-        }
-
-        function togglePcViewMode() {
-            const currentMode = document.body.classList.contains('pc-mode-agenda') ? 'agenda' : 'grid';
-            const targetMode = (currentMode === 'grid') ? 'agenda' : 'grid';
-            applyPcViewMode(targetMode);
-        }
-
-        function initPcViewMode() {
-            const savedMode = localStorage.getItem('tkb_pc_view_mode') || 'grid';
-            applyPcViewMode(savedMode);
-        }
-
-        window.addEventListener('resize', () => {
-            renderLandscapeGrid();
-        });
-
-        window.addEventListener('orientationchange', () => {
-            setTimeout(renderLandscapeGrid, 200);
-        });
-
-        if ('caches' in window) {
-            caches.keys().then((names) => {
-                for (let name of names) {
-                    if (name !== 'tkb-live-v1' && name !== 'tkb-static-v1') {
-                        caches.delete(name);
-                    }
-                }
-            });
-        }
-
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js').then((reg) => {
-                    reg.update();
-                }).catch(() => {});
-            });
-        }
-
-        async function syncDataFromServer() {
-            if (!navigator.onLine) {
-                return false;
-            }
-            try {
-                const res = await fetch('api.php?t=' + Date.now(), { 
-                    cache: 'no-store',
-                    headers: { 'Pragma': 'no-cache', 'Cache-Control': 'no-cache' }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && data.schedule_data) {
-                        scheduleData = data.schedule_data;
-                        rawSchedules = data.raw_schedules;
-                        teachersMap = data.teachers_map;
-                        appSettings = Object.assign({}, appSettings, data.settings);
-
-                        if (data.todo_tags !== undefined && data.todo_tags !== null) {
-                            let serverTags = data.todo_tags;
-                            if (Array.isArray(serverTags) || typeof serverTags !== 'object') {
-                                serverTags = {};
-                            }
-                            localStorage.setItem('tkb_todo_tags', JSON.stringify(serverTags));
-                        }
-
-                        if (data.daily_notes !== undefined && data.daily_notes !== null) {
-                            serverDailyNotes = data.daily_notes;
-                            localStorage.setItem('tkb_daily_notes', JSON.stringify(serverDailyNotes));
-                        }
-
-                        if (data.exam_schedules !== undefined && data.exam_schedules !== null) {
-                            localStorage.setItem('tkb_exam_schedules', JSON.stringify(data.exam_schedules));
-                        }
-
-                        saveToOfflineStorage();
-                        updateHeaderNames();
-
-                        const currentScrollY = window.scrollY;
-                        const currentScrollX = window.scrollX;
-
-                        const wrappers = document.querySelectorAll('.landscape-table-wrapper');
-                        const savedWrapperScrolls = [];
-                        wrappers.forEach(wrap => {
-                            savedWrapperScrolls.push({
-                                scrollLeft: wrap.scrollLeft,
-                                scrollTop: wrap.scrollTop
-                            });
-                        });
-
-                        refreshRealTimeDates();
-                        renderAgenda();
-                        updateDynamicWidget();
-                        renderLandscapeGrid();
-                        checkRainAlert();
-                        updateExamBadgeCount();
-
-                        window.scrollTo(currentScrollX, currentScrollY);
-
-                        const newWrappers = document.querySelectorAll('.landscape-table-wrapper');
-                        newWrappers.forEach((wrap, idx) => {
-                            if (savedWrapperScrolls[idx]) {
-                                wrap.scrollLeft = savedWrapperScrolls[idx].scrollLeft;
-                                wrap.scrollTop = savedWrapperScrolls[idx].scrollTop;
-                            }
-                        });
-
-                        return true;
-                    }
-                }
-            } catch (err) {
-                console.log('Đang chạy ở chế độ offline hoặc mạng chậm.');
-            }
-            return false;
-        }
-
-        async function manualSync() {
-            const btn = document.getElementById('refreshBtn');
-            const icon = btn.querySelector('i');
-            icon.classList.add('fa-spin');
-
-            refreshRealTimeDates();
-            if (navigator.onLine) {
-                await syncDataFromServer();
-            } else {
-                showNetworkToast('offline', 'Bạn đang offline, không thể cập nhật trực tuyến');
-            }
-
+        function printSingleTable(cardId) {
+            document.body.classList.add('printing-single');
+            document.querySelectorAll('.landscape-table-card').forEach(c => c.classList.remove('target-print'));
+            const target = document.getElementById(cardId);
+            if (target) target.classList.add('target-print');
+
+            window.print();
             setTimeout(() => {
-                icon.classList.remove('fa-spin');
-            }, 600);
+                document.body.classList.remove('printing-single');
+                if (target) target.classList.remove('target-print');
+            }, 500);
         }
 
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                refreshRealTimeDates();
-                if (navigator.onLine) {
-                    syncDataFromServer();
-                }
-            }
-        });
+        let scheduleData = <?php echo json_encode($app_data, JSON_UNESCAPED_UNICODE); ?>;
+        const daysKeysList = <?php echo json_encode($days_keys); ?>;
+        let rawSchedules = <?php echo json_encode($raw_schedules, JSON_UNESCAPED_UNICODE); ?>;
+        let teachersMap = <?php echo json_encode($teachers_map, JSON_UNESCAPED_UNICODE); ?>;
+        let appSettings = <?php echo json_encode($settings, JSON_UNESCAPED_UNICODE); ?>;
+        let serverDailyNotes = <?php echo json_encode($server_daily_notes, JSON_UNESCAPED_UNICODE); ?>;
 
         initPcViewMode();
         refreshRealTimeDates();
