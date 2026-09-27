@@ -1,0 +1,21 @@
+{
+  "name": "Thời Khóa Biểu Học Tập",
+  "short_name": "Thời Khoá Biểu",
+  "start_url": "index.php",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "https://thanhnhan.site/tkb/thoikhoabieu.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://thanhnhan.site/tkb/thoikhoabieu.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
