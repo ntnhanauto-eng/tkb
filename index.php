@@ -1443,6 +1443,10 @@ foreach ($raw_schedules as $row) {
             <div class="month-title"><i class="fa-regular fa-calendar-days"></i> <span id="currentMonthStrDisplay"><?php echo $current_month_str; ?></span></div>
 
             <div class="month-actions">
+                <!-- NÚT THÊM GHI CHÚ NGÀY (Mới) -->
+                <button type="button" class="today-quick-btn" onclick="openDailyNoteModal()" title="Thêm ghi chú cho ngày này" style="background:#eef2ff; color:var(--primary); border:1px solid #c7d2fe;">
+                    <i class="fa-solid fa-plus"></i>
+                </button>
                 <button type="button" class="voice-read-btn" id="voiceAssistantBtn" onclick="toggleVoiceSpeech()" title="Đọc thời khóa biểu hôm nay">
                     <i class="fa-solid fa-volume-high" id="voiceIcon"></i>
                     <span id="voiceBtnText">Đọc lịch</span>
@@ -1464,6 +1468,22 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
+<!-- KHUNG HIỂN THỊ GHI CHÚ THEO NGÀY (Mới - Chỉ hiện khi có ghi chú) -->
+    <div id="dailyNoteDisplayBox" style="display: none; max-width: 600px; margin: 10px auto 0; padding: 0 16px; width: 100%;">
+        <div style="background: #fffbeb; border: 1.5px solid #fde68a; border-left: 4px solid #f59e0b; border-radius: 12px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+            <div style="display: flex; align-items: flex-start; gap: 8px;">
+                <i class="fa-solid fa-note-sticky" style="color: #d97706; margin-top: 2px; font-size: 14px;"></i>
+                <div>
+                    <div style="font-size: 10.5px; font-weight: 800; color: #b45309; text-transform: uppercase;" id="dailyNoteTitleLabel">Ghi chú ngày</div>
+                    <div style="font-size: 12.5px; font-weight: 700; color: #78350f; margin-top: 2px;" id="dailyNoteContentText"></div>
+                </div>
+            </div>
+            <button type="button" onclick="openDailyNoteModal()" style="background: none; border: none; color: #d97706; font-size: 12px; cursor: pointer; padding: 4px;" title="Sửa ghi chú">
+                <i class="fa-solid fa-pen"></i>
+            </button>
+        </div>
+    </div>
+    
     <!-- 4. WIDGET THÔNG BÁO TIẾT HỌC ĐỘNG & DỰ BÁO THỜI TIẾT TỪNG BUỔI NINH HÒA -->
     <div class="upcoming-widget" id="upcomingWidget">
         <div id="rainAlertBox" style="display:none; margin-bottom: 8px;"></div>
@@ -1559,6 +1579,39 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
+<!-- MODAL NHẬP / SỬA GHI CHÚ NGÀY (Mới) -->
+    <div id="dailyNoteModal" class="modal-overlay" onclick="closeDailyNoteModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-note-sticky" style="color: #f59e0b;"></i> Ghi Chú Theo Ngày</h3>
+                <button type="button" class="modal-close-btn" onclick="closeDailyNoteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="dailyNoteModalSubInfo" style="font-size: 12px; font-weight: 800; color: #ea580c; margin-bottom: 10px;"></div>
+                
+                <label class="form-label">Chọn ngày áp dụng ghi chú</label>
+                <input type="date" id="dailyNoteDateInput" class="form-input" onchange="onNoteDateSelectedChange()">
+
+                <label class="form-label">Nội dung ghi chú trong ngày</label>
+                <textarea id="dailyNoteTextarea" class="form-input" rows="3" placeholder="Ví dụ: Bé về sớm 15 phút; Hôm nay mang áo mưa..." style="resize: vertical;"></textarea>
+
+                <label class="form-label">Mật khẩu xác nhận</label>
+                <input type="password" id="dailyNotePassword" class="form-input" placeholder="Mật khẩu của bé hoặc Admin">
+                <div class="pass-hint-box" style="margin-bottom: 12px;">
+                    <i class="fa-solid fa-shield-halved"></i>
+                    <span>Cần nhập mật khẩu tài khoản của bé hoặc Admin để lưu hoặc xóa.</span>
+                </div>
+
+                <div style="display: flex; gap: 8px;">
+                    <button type="button" class="btn-submit-tag" onclick="saveDailyNote()"><i class="fa-solid fa-check"></i> Lưu ghi chú</button>
+                    <button type="button" id="btnDeleteDailyNote" class="btn-delete-tag" style="display:none; margin-top:0;" onclick="removeDailyNote()"><i class="fa-solid fa-trash-can"></i> Xóa</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    
     <!-- 10. MODAL GẮN HUY HIỆU BÀI TẬP / LỊCH KIỂM TRA -->
     <div id="todoTagModal" class="modal-overlay" onclick="closeTodoTagModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
@@ -2864,6 +2917,7 @@ foreach ($raw_schedules as $row) {
                 window.speechSynthesis.cancel();
                 setSpeakingUI(false);
             }
+            renderDailyNoteDisplay();
         }
 
         function changeDay(dayKey) {
@@ -2883,6 +2937,7 @@ foreach ($raw_schedules as $row) {
                 window.speechSynthesis.cancel();
                 setSpeakingUI(false);
             }
+        renderDailyNoteDisplay();
         }
 
         function goToToday() {
@@ -3833,6 +3888,7 @@ foreach ($raw_schedules as $row) {
         changeDay(realTodayKey);
         renderLandscapeGrid();
         updateExamBadgeCount();
+        renderDailyNoteDisplay();
 
         // Trì hoãn gọi mạng ngầm (thời tiết & đồng bộ server) để app hiển thị giao diện tức thì không bị chậm
         setTimeout(() => {
@@ -3854,6 +3910,186 @@ foreach ($raw_schedules as $row) {
         setInterval(() => {
             checkRainAlert();
         }, 15 * 60 * 1000);
+
+
+      // --- QUẢN LÝ GHI CHÚ THEO NGÀY (Daily Notes) ---
+let activeNoteDayKey = null; // Lưu day_key đang thao tác trong modal
+
+function getDailyNotes() {
+    try {
+        const raw = localStorage.getItem('tkb_daily_notes');
+        let data = raw ? JSON.parse(raw) : {};
+        return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+async function syncDailyNotesToCloud(notes) {
+    if (!navigator.onLine) return;
+    try {
+        await fetch('api.php?action=sync_daily_notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ daily_notes: notes })
+        });
+    } catch (e) {
+        console.log('Lưu ghi chú ngày cloud ngầm: lỗi kết nối');
+    }
+}
+
+function openDailyNoteModal() {
+    let kidId = currentProfile === 'all' ? '1' : currentProfile;
+    let kidName = (kidId === '2') ? (appSettings.kid2_name || 'Thành Phát') : (appSettings.kid1_name || 'Trâm Anh');
+    
+    document.getElementById('dailyNoteModalSubInfo').innerHTML = `Đang thao tác cho bé: <b>${kidName}</b>`;
+    document.getElementById('dailyNotePassword').value = '';
+
+    // Mặc định chọn ngày hiện tại (currentDay) đang xem trên lịch
+    activeNoteDayKey = currentDay;
+    let dayObj = weekDates[currentDay] || {};
+    
+    // Tạo chuỗi YYYY-MM-DD từ ngày tháng hiện tại của tuần
+    const now = new Date();
+    let year = now.getFullYear();
+    let mm = dayObj.month || String(now.getMonth() + 1).padStart(2, '0');
+    let dd = dayObj.date || String(now.getDate()).padStart(2, '0');
+    
+    document.getElementById('dailyNoteDateInput').value = `${year}-${mm}-${dd}`;
+
+    loadNoteContentToModal(kidId, activeNoteDayKey);
+    document.getElementById('dailyNoteModal').style.display = 'flex';
+}
+
+function onNoteDateSelectedChange() {
+    const val = document.getElementById('dailyNoteDateInput').value;
+    if (!val) return;
+    
+    // Dò xem ngày chọn thuộc day_key nào trong weekDates
+    let parts = val.split('-'); // [YYYY, MM, DD]
+    if (parts.length === 3) {
+        let targetMM_DD = `${parts[2]}/${parts[1]}`;
+        let foundKey = currentDay;
+        for (let dk in weekDates) {
+            if (weekDates[dk].full_date === targetMM_DD) {
+                foundKey = dk;
+                break;
+            }
+        }
+        activeNoteDayKey = foundKey;
+    }
+
+    let kidId = currentProfile === 'all' ? '1' : currentProfile;
+    loadNoteContentToModal(kidId, activeNoteDayKey);
+}
+
+function loadNoteContentToModal(kidId, dayKey) {
+    const notes = getDailyNotes();
+    const noteKey = `${kidId}_${dayKey}`;
+    const currentNote = notes[noteKey];
+    const btnDel = document.getElementById('btnDeleteDailyNote');
+
+    if (currentNote) {
+        document.getElementById('dailyNoteTextarea').value = currentNote.content || '';
+        btnDel.style.display = 'block';
+    } else {
+        document.getElementById('dailyNoteTextarea').value = '';
+        btnDel.style.display = 'none';
+    }
+}
+
+function closeDailyNoteModal(e) {
+    if (!e || e.target.id === 'dailyNoteModal') {
+        document.getElementById('dailyNoteModal').style.display = 'none';
+    }
+}
+
+function saveDailyNote() {
+    let kidId = currentProfile === 'all' ? '1' : currentProfile;
+    let content = document.getElementById('dailyNoteTextarea').value.trim();
+    let enteredPass = document.getElementById('dailyNotePassword').value.trim();
+
+    if (!content) {
+        alert('Vui lòng nhập nội dung ghi chú!');
+        return;
+    }
+
+    if (!enteredPass) {
+        alert('Vui lòng nhập mật khẩu tài khoản của bé hoặc Admin để lưu!');
+        return;
+    }
+
+    if (!verifyKidOrAdminPassword(kidId, enteredPass)) {
+        alert('Mật khẩu không chính xác!');
+        return;
+    }
+
+    let notes = getDailyNotes();
+    const noteKey = `${kidId}_${activeNoteDayKey}`;
+    
+    notes[noteKey] = {
+        content: content,
+        day_key: activeNoteDayKey,
+        updatedAt: Date.now()
+    };
+
+    localStorage.setItem('tkb_daily_notes', JSON.stringify(notes));
+    syncDailyNotesToCloud(notes);
+    closeDailyNoteModal();
+    renderDailyNoteDisplay();
+}
+
+function removeDailyNote() {
+    let kidId = currentProfile === 'all' ? '1' : currentProfile;
+    let enteredPass = document.getElementById('dailyNotePassword').value.trim();
+
+    if (!enteredPass || !verifyKidOrAdminPassword(kidId, enteredPass)) {
+        alert('Mật khẩu không chính xác!');
+        return;
+    }
+
+    let notes = getDailyNotes();
+    const noteKey = `${kidId}_${activeNoteDayKey}`;
+
+    if (notes[noteKey]) {
+        delete notes[noteKey];
+        localStorage.setItem('tkb_daily_notes', JSON.stringify(notes));
+        syncDailyNotesToCloud(notes);
+    }
+    closeDailyNoteModal();
+    renderDailyNoteDisplay();
+}
+
+function renderDailyNoteDisplay() {
+    const box = document.getElementById('dailyNoteDisplayBox');
+    const contentText = document.getElementById('dailyNoteContentText');
+    const titleLabel = document.getElementById('dailyNoteTitleLabel');
+
+    if (!box || !contentText) return;
+
+    let kidId = currentProfile === 'all' ? '1' : currentProfile;
+    let kidName = (kidId === '2') ? (appSettings.kid2_name || 'Thành Phát') : (appSettings.kid1_name || 'Trâm Anh');
+    let dayInfo = weekDates[currentDay] || {};
+
+    let notes = getDailyNotes();
+    const noteKey = `${kidId}_${currentDay}`;
+    const currentNote = notes[noteKey];
+
+    if (currentNote && currentNote.content) {
+        titleLabel.innerText = `Ghi chú ngày ${dayInfo.full_date || ''} (${kidName})`;
+        contentText.innerText = currentNote.content;
+        box.style.display = 'block';
+    } else {
+        box.style.display = 'none';
+    }
+}
+
+
+
+
+
+
+        
     </script>
 </body>
 </html>
