@@ -4,67 +4,33 @@ header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Pragma: no-cache");
 header("Expires: 0");
 
-// Đảm bảo include file kết nối an toàn
-if (file_exists('db.php')) {
-    include 'db.php'; 
-} else {
-    die("Lỗi: Không tìm thấy file kết nối cơ sở dữ liệu db.php.");
-}
+include 'db.php'; 
 
 // Thiết lập múi giờ Việt Nam
 date_default_timezone_set('Asia/Ho_Chi_Minh');
 
-// Lấy thông tin cấu hình từ bảng app_settings
+// Lấy thông tin cấu hình từ bảng app_settings (nếu chưa có sẽ lấy giá trị mặc định)
 $settings = [
     'kid1_name'   => 'Trâm Anh',
     'kid1_class'  => '6A3',
+    'kid1_pass'   => '123456',
     'kid2_name'   => 'Thành Phát',
     'kid2_class'  => '10A4',
+    'kid2_pass'   => '123456',
+    'admin_pass'  => 'admin123',
     'semester'    => 'HK1',
     'school_year' => '2026-2027',
     'splash_img'  => 'https://thanhnhan.site/tkb/thoikhoabieu.png'
 ];
-
 try {
-    if (isset($conn) && $conn) {
-        $st_set = $conn->query("SELECT setting_key, setting_val FROM app_settings");
-        if ($st_set) {
-            $db_settings = $st_set->fetchAll(PDO::FETCH_KEY_PAIR);
-            $settings = array_merge($settings, $db_settings);
-        }
+    $st_set = $conn->query("SELECT setting_key, setting_val FROM app_settings");
+    if ($st_set) {
+        $db_settings = $st_set->fetchAll(PDO::FETCH_KEY_PAIR);
+        $settings = array_merge($settings, $db_settings);
     }
 } catch (Exception $e) {
     // Sử dụng mặc định nếu bảng chưa tồn tại
 }
-
-// Lấy mật khẩu từ bảng users trong database để xác thực chính xác
-$db_passwords = [
-    'admin'     => '123456789',
-    'tramanh'   => '123456',
-    'thanhphat' => '456789'
-];
-
-try {
-    if (isset($conn) && $conn) {
-        $st_usr = $conn->query("SELECT username, password FROM users");
-        if ($st_usr) {
-            $users_rows = $st_usr->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($users_rows as $u) {
-                $u_name = strtolower(trim($u['username']));
-                if ($u_name === 'admin') $db_passwords['admin'] = $u['password'];
-                if ($u_name === 'tramanh' || $u_name === '1') $db_passwords['tramanh'] = $u['password'];
-                if ($u_name === 'thanhphat' || $u_name === '2') $db_passwords['thanhphat'] = $u['password'];
-            }
-        }
-    }
-} catch (Exception $e) {
-    // Sử dụng mặc định nếu bảng users chưa tồn tại
-}
-
-// Đưa vào mảng settings để truyền xuống JS
-$settings['admin_pass'] = $db_passwords['admin'];
-$settings['kid1_pass']  = $db_passwords['tramanh'];
-$settings['kid2_pass']  = $db_passwords['thanhphat'];
 
 // Xác định thứ hiện tại (0 = CN, 1 = T2, ..., 6 = T7)
 $current_w = (int)date('w');
@@ -95,34 +61,22 @@ for ($i = 0; $i < 7; $i++) {
 $teachers_map = [];
 $teachers_by_kid = ['1' => [], '2' => []];
 try {
-    if (isset($conn) && $conn) {
-        $stmt_tc = $conn->query("SELECT * FROM teachers ORDER BY be_name ASC, subject_name ASC");
-        if ($stmt_tc) {
-            $all_teachers = $stmt_tc->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($all_teachers as $tc) {
-                $teachers_map[$tc['id']] = $tc;
-                $teachers_by_kid[$tc['be_name']][] = $tc;
-            }
-        }
+    $stmt_tc = $conn->query("SELECT * FROM teachers ORDER BY be_name ASC, subject_name ASC");
+    $all_teachers = $stmt_tc->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($all_teachers as $tc) {
+        $teachers_map[$tc['id']] = $tc;
+        $teachers_by_kid[$tc['be_name']][] = $tc;
     }
 } catch (Exception $e) {
     $teachers_map = [];
 }
 
-// Lấy dữ liệu Thời Khóa Biểu an toàn
-$raw_schedules = [];
-$app_data = [];
-try {
-    if (isset($conn) && $conn) {
-        $stmt = $conn->query("SELECT * FROM schedule ORDER BY FIELD(buoi, 'SÁNG', 'CHIỀU', 'TỐI'), id ASC");
-        if ($stmt) {
-            $raw_schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        }
-    }
-} catch (Exception $e) {
-    $raw_schedules = [];
-}
+// Lấy dữ liệu Thời Khóa Biểu
+$stmt = $conn->query("SELECT * FROM schedule ORDER BY FIELD(buoi, 'SÁNG', 'CHIỀU', 'TỐI'), id ASC");
+$raw_schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Chuyển dữ liệu sang mảng App
+$app_data = [];
 foreach ($raw_schedules as $row) {
     $be_id = (string)$row['be_name'];
     foreach ($days_keys as $dk) {
@@ -153,6 +107,7 @@ foreach ($raw_schedules as $row) {
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
+    <!-- Mở khoá zoom cho cả Mobile và PC: cho phép user-scalable và tăng maximum-scale lên 5.0 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
     <title>Thời Khóa Biểu Học Tập</title>
 
@@ -208,8 +163,6 @@ foreach ($raw_schedules as $row) {
             overflow-x: auto;
             display: flex;
             flex-direction: column;
-            -webkit-font-smoothing: antialiased;
-            text-rendering: optimizeLegibility;
         }
 
         /* --- MÀN HÌNH CHÀO KHỞI ĐỘNG (SPLASH SCREEN) --- */
@@ -362,6 +315,7 @@ foreach ($raw_schedules as $row) {
         }
         .icon-btn:active { transform: scale(0.92); }
 
+        /* Badge đếm số môn thi trên nút Header */
         .exam-badge-count {
             position: absolute;
             top: -3px;
@@ -379,6 +333,7 @@ foreach ($raw_schedules as $row) {
             border: 1.5px solid #ffffff;
         }
 
+        /* DROPDOWN MENU TÙY CHỌN (3 CHẤM) */
         .more-dropdown-menu {
             display: none;
             position: absolute;
@@ -427,6 +382,7 @@ foreach ($raw_schedules as $row) {
             text-align: center;
         }
 
+        /* Nút chuyển đổi View Mode chỉ hiển thị trên PC (Màn hình lớn >= 1024px) */
         .pc-view-toggle-item {
             display: none !important;
         }
@@ -469,6 +425,7 @@ foreach ($raw_schedules as $row) {
         .today-quick-btn { font-size: 11px; font-weight: 700; color: #475569; background: #e2e8f0; padding: 4px 9px; border-radius: 12px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
         .today-quick-btn:active { transform: scale(0.95); }
 
+        /* Nút trợ lý giọng nói */
         .voice-read-btn {
             font-size: 11px;
             font-weight: 700;
@@ -494,32 +451,22 @@ foreach ($raw_schedules as $row) {
             100% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
         }
 
-        .date-strip { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 6px; padding-top: 4px; }
+        .date-strip { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
         .date-strip::-webkit-scrollbar { display: none; }
 
         .date-item {
-            flex: 1; min-width: 46px; height: 64px; padding: 8px 2px; text-align: center; border-radius: 16px;
-            background: #e2e8f0; border: 2px solid #cbd5e1; cursor: pointer; transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+            flex: 1; min-width: 44px; height: 62px; padding: 8px 2px; text-align: center; border-radius: 14px;
+            background: #e2e8f0; border: 2px solid #cbd5e1; cursor: pointer; transition: all 0.2s;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
         .date-item .d-day { font-size: 15px; font-weight: 800; color: #1e293b; line-height: 1.1; margin-bottom: 3px; }
-        .date-item .d-num { font-size: 11.5px; font-weight: 700; color: #475569; line-height: 1; }
+        .date-item .d-num { font-size: 11px; font-weight: 700; color: #475569; line-height: 1; }
         .date-item.is-weekend .d-day { color: #dc2626 !important; }
         .date-item.is-weekend .d-num { color: #ef4444 !important; }
-        
-        .date-item.active { 
-            border-color: var(--active-theme-color) !important; 
-            background: var(--active-theme-color) !important; 
-            box-shadow: 0 10px 22px -4px rgba(79, 70, 229, 0.45), 0 4px 6px -2px rgba(0, 0, 0, 0.1) !important; 
-            transform: translateY(-4px) scale(1.02); 
-            z-index: 5; 
-        }
-        .date-item.active .d-day, 
-        .date-item.active .d-num { 
-            color: #ffffff !important; 
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); 
-        }
+        .date-item.active { border-color: var(--active-theme-color) !important; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12); transform: translateY(-2px); background: #ffffff !important; }
+        .date-item.active:not(.is-weekend) .d-day, .date-item.active:not(.is-weekend) .d-num { color: var(--active-theme-color) !important; }
 
+        /* UPCOMING WIDGET */
         .upcoming-widget {
             margin: 12px 16px 4px; 
             background: #0f172a; 
@@ -530,6 +477,7 @@ foreach ($raw_schedules as $row) {
             border: 1px solid #1e293b;
         }
 
+        /* KHUNG CẢNH BÁO THỜI TIẾT */
         .weather-alert-row {
             display: flex;
             align-items: center;
@@ -652,6 +600,7 @@ foreach ($raw_schedules as $row) {
             background: #f1f5f9 !important;
         }
 
+        /* Vạch tiến độ thời gian thực */
         .live-progress-container {
             margin-top: 10px;
             margin-bottom: 4px;
@@ -778,6 +727,7 @@ foreach ($raw_schedules as $row) {
             transform: scale(0.95);
         }
 
+        /* HUY HIỆU TRÊN GIAO DIỆN MOBILE CUỘN DỌC (AGENDA) */
         .custom-todo-badge {
             margin-top: 6px;
             display: inline-flex;
@@ -843,6 +793,7 @@ foreach ($raw_schedules as $row) {
             flex-shrink: 0;
         }
 
+        /* GHI CHÚ PHỤ TRONG Ô THỜI KHÓA BIỂU */
         .grid-sub-note {
             font-size: 8.5px;
             font-weight: 700;
@@ -864,6 +815,7 @@ foreach ($raw_schedules as $row) {
         .buoi-pill { background: #e2e8f0; color: #475569; font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 20px; }
         .empty-state { text-align: center; padding: 35px 10px; background: white; border-radius: 16px; border: 1px dashed #cbd5e1; margin-left: -20px; }
 
+        /* BẢNG LƯỚI THỜI GIAN THỰC (DESKTOP & MOBILE XOAY NGANG) */
         #landscapeGridSection { display: none; padding: 10px 14px; max-width: 1280px; margin: 0 auto; width: 100%; flex: 1; }
 
         .landscape-table-card {
@@ -924,6 +876,7 @@ foreach ($raw_schedules as $row) {
             pointer-events: none;
         }
 
+        /* Ô TIẾT HỌC TRONG BẢNG LƯỚI: THU GỌN KHOẢNG CÁCH VIỀN TRÊN DƯỚI */
         .grid-sub-box {
             position: absolute;
             left: 3px;
@@ -978,6 +931,7 @@ foreach ($raw_schedules as $row) {
             padding: 0;
         }
 
+        /* NÚT FULLSCREEN KHI XOAY NGANG TRÊN MOBILE */
         .fullscreen-btn {
             display: none;
             position: fixed;
@@ -1002,6 +956,7 @@ foreach ($raw_schedules as $row) {
             transform: scale(0.92);
         }
 
+        /* CHẾ ĐỘ XOAY NGANG TRÊN MOBILE */
         @media screen and (orientation: landscape) and (max-width: 1023px) {
             .date-strip-box, .upcoming-widget, .timeline-section { display: none !important; }
             #landscapeGridSection { display: block !important; }
@@ -1027,6 +982,7 @@ foreach ($raw_schedules as $row) {
             }
         }
 
+        /* TRÊN PC (DESKTOP/LAPTOP) */
         @media screen and (min-width: 1024px) {
             body.pc-mode-grid .date-strip-box,
             body.pc-mode-grid .upcoming-widget,
@@ -1047,6 +1003,7 @@ foreach ($raw_schedules as $row) {
             }
         }
 
+        /* MODAL LỊCH THI TẬP TRUNG CHIA 2 TAB */
         .exam-tabs-nav {
             display: flex;
             background: #e2e8f0;
@@ -1129,6 +1086,7 @@ foreach ($raw_schedules as $row) {
             font-weight: 700;
         }
 
+        /* IN ẤN KHỔ A4 NGANG (VỪA VẶN 1 TRANG GIẤY DUY NHẤT) */
         @page { 
             size: A4 landscape; 
             margin: 4mm 5mm; 
@@ -1307,6 +1265,7 @@ foreach ($raw_schedules as $row) {
             gap: 6px;
         }
 
+        /* Thống kê môn học */
         .summary-kid-title {
             font-size: 13px;
             font-weight: 800;
@@ -1339,6 +1298,7 @@ foreach ($raw_schedules as $row) {
             border-radius: 12px; 
         }
 
+        /* Danh sách tìm kiếm môn học */
         .search-result-item {
             padding: 10px 12px;
             border-radius: 10px;
@@ -1356,6 +1316,7 @@ foreach ($raw_schedules as $row) {
             border-color: #c7d2fe;
         }
 
+        /* Footer mờ gọn gàng sát đáy */
         .app-footer {
             text-align: center;
             padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
@@ -1382,153 +1343,11 @@ foreach ($raw_schedules as $row) {
             margin-top: 1px;
             font-weight: 600;
         }
-
-        /* ==========================================================================
-            GIAO DIỆN 3.0
-            ========================================================================== */
-        :root {
-            --primary: #4f46e5;
-            --primary-dark: #4338ca;
-            --primary-grad: linear-gradient(135deg, #6366f1 0%, #4f46e5 60%, #4338ca 100%);
-            --kid1-grad: linear-gradient(135deg, #34d399, #059669);
-            --kid2-grad: linear-gradient(135deg, #60a5fa, #2563eb);
-            --ease: cubic-bezier(0.22, 1, 0.36, 1);
-            --ease-snap: cubic-bezier(0.34, 1.56, 0.64, 1);
-            --shadow-md: 0 14px 32px -10px rgba(79, 70, 229, 0.22);
-            --shadow-lg: 0 24px 55px -14px rgba(15, 23, 42, 0.22);
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
-        }
-        html { scroll-behavior: smooth; }
-
-        body {
-            background:
-                radial-gradient(900px 480px at 106% -10%, rgba(79, 70, 229, 0.16), transparent 60%),
-                radial-gradient(760px 420px at -6% 4%, rgba(16, 185, 129, 0.13), transparent 58%),
-                radial-gradient(700px 500px at 50% 110%, rgba(59, 130, 246, 0.10), transparent 55%),
-                #f4f6fb;
-        }
-
-        @media (min-width: 1024px) {
-            ::-webkit-scrollbar { width: 10px; height: 10px; }
-            ::-webkit-scrollbar-track { background: transparent; }
-            ::-webkit-scrollbar-thumb { background: #c7cff0; border-radius: 20px; border: 2px solid transparent; background-clip: padding-box; }
-        }
-
-        .app-header {
-            background: linear-gradient(135deg, rgba(238, 242, 255, 0.92), rgba(255, 255, 255, 0.88));
-            border-bottom: none;
-            box-shadow: 0 1px 0 rgba(79, 70, 229, 0.08);
-        }
-        .app-header::after {
-            content: '';
-            position: absolute; left: 0; right: 0; bottom: -3px; height: 3px;
-            background: var(--primary-grad);
-        }
-        .header-left h1 {
-            font-size: 19px;
-            background: var(--primary-grad);
-            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-            letter-spacing: -0.4px;
-        }
-        .header-left h1 i {
-            -webkit-text-fill-color: initial;
-        }
-        .icon-btn {
-            border: none;
-            background: #eef1fb;
-            color: var(--primary-dark);
-            border-radius: 12px;
-            transition: transform .2s var(--ease-snap), box-shadow .2s var(--ease), background-color .2s ease;
-        }
-        .icon-btn:hover { background: #e0e7ff; box-shadow: 0 8px 18px -6px rgba(79, 70, 229, 0.4); transform: translateY(-1px); }
-        .icon-btn:active { transform: scale(0.9); }
-        .more-dropdown-menu { border: none; border-radius: 16px; box-shadow: var(--shadow-lg); }
-        .dropdown-item-btn { border-radius: 10px; transition: all .15s ease; }
-        .dropdown-item-btn:hover { background: #eef2ff; color: var(--primary-dark); padding-left: 16px; }
-
-        .profile-pill { border-radius: 16px; border: none; background: #ffffff; box-shadow: 0 3px 10px -4px rgba(15,23,42,0.12); }
-        .profile-avatar { border-radius: 10px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.3); }
-        .profile-pill.active[data-target="all"] { background: var(--primary-grad) !important; box-shadow: var(--shadow-md); }
-        .profile-pill.active[data-target="all"] .name, .profile-pill.active[data-target="all"] .desc { color: #fff !important; }
-        .profile-pill.active[data-target="1"] { background: var(--kid1-grad) !important; box-shadow: 0 14px 32px -10px rgba(5,150,105,.4); }
-        .profile-pill.active[data-target="1"] .name, .profile-pill.active[data-target="1"] .desc { color: #fff !important; }
-        .profile-pill.active[data-target="2"] { background: var(--kid2-grad) !important; box-shadow: 0 14px 32px -10px rgba(37,99,235,.4); }
-        .profile-pill.active[data-target="2"] .name, .profile-pill.active[data-target="2"] .desc { color: #fff !important; }
-        .profile-pill.active .profile-avatar { background: rgba(255,255,255,.25) !important; }
-
-        .date-strip-box {
-            background: transparent;
-            border-bottom: none;
-            top: calc(60px + env(safe-area-inset-top, 0px));
-            padding-top: 12px;
-        }
-
-        .voice-read-btn { border-radius: 999px; box-shadow: 0 4px 14px -3px rgba(79,70,229,.5); }
-        .today-quick-btn { border-radius: 999px; background: #e9ecf7; }
-
-        .upcoming-widget {
-            background: linear-gradient(160deg, #12172b, #0b0f1e);
-            border-radius: 22px;
-            border: 1px solid rgba(99,102,241,.28);
-            box-shadow: var(--shadow-lg);
-        }
-        .widget-icon { border-radius: 12px; }
-        .widget-item.clickable { border-radius: 12px; }
-
-        .subject-card {
-            border-radius: 18px;
-            border-width: 1.5px;
-            box-shadow: 0 4px 14px -6px rgba(15,23,42,.10);
-            transition: transform .25s var(--ease), box-shadow .25s var(--ease);
-        }
-        .subject-card:has(.kid-tag-1) { background: #f0fdf6 !important; border-color: #6ee7b7 !important; }
-        .subject-card:has(.kid-tag-2) { background: #eff6ff !important; border-color: #93c5fd !important; }
-        @media (hover: hover) {
-            .subject-card:not(.is-past-slot):hover { transform: translateY(-3px) translateX(2px); box-shadow: 0 14px 30px -10px rgba(15,23,42,.22); }
-        }
-        .subject-title-link { font-size: 17px; }
-        .kid-tag, .buoi-tag, .teacher-tag-btn, .custom-todo-badge, .add-badge-btn { border-radius: 999px !important; }
-        .teacher-tag-btn { background: #fff; border: 1.5px solid var(--primary); }
-        .teacher-tag-btn:hover { background: var(--primary-grad); border-color: transparent; }
-
-        .btn-submit-tag { background: var(--primary-grad); border-radius: 999px; box-shadow: 0 10px 24px -8px rgba(79,70,229,.55); }
-        .btn-delete-tag { border-radius: 999px; }
-        .t-call-btn, .t-zalo-btn { border-radius: 999px; }
-        .form-input, .form-select { border-radius: 12px; border-width: 2px; }
-        .form-input:focus, .form-select:focus { box-shadow: 0 0 0 4px #e0e7ff; }
-
-        .modal-content { border-radius: 24px; box-shadow: var(--shadow-lg); overflow: hidden; }
-        .modal-header { background: linear-gradient(135deg, #eef2ff, #ffffff); border-bottom: none; box-shadow: inset 0 -1px 0 rgba(79,70,229,.08); }
-        .modal-close-btn { border-radius: 50%; width: 30px; height: 30px; background: #eef1fb; }
-        .summary-card, .search-result-item, .exam-card-item { border-radius: 14px; border: none; box-shadow: 0 3px 10px -4px rgba(15,23,42,.10); }
-
-        .landscape-table-card { border-radius: 20px; border: none; box-shadow: var(--shadow-lg); overflow: hidden; }
-        .landscape-card-header { background: linear-gradient(135deg, #eef2ff, #ffffff); }
-        .landscape-table th { background: var(--primary-grad); color: #fff; }
-        .landscape-table th span { color: rgba(255, 255, 255, 0.92) !important; }
-        .landscape-table .col-buoi, .landscape-table .col-tiet { background: #f7f8fd; }
-        [id^="printCard_1"] .grid-sub-box { background: #ecfdf5 !important; border-color: #6ee7b7 !important; }
-        [id^="printCard_1"] .grid-sub-title { color: #047857 !important; }
-        [id^="printCard_2"] .grid-sub-box { background: #eff6ff !important; border-color: #93c5fd !important; }
-        [id^="printCard_2"] .grid-sub-title { color: #1d4ed8 !important; }
-        .grid-sub-box { border-radius: 10px; transition: transform .18s var(--ease), box-shadow .18s var(--ease); }
-        @media (hover: hover) {
-            .grid-sub-box:not(.is-past-slot):hover { transform: scale(1.04); box-shadow: 0 10px 22px -6px rgba(15,23,42,.28); z-index: 8; }
-        }
-        .print-tkb-btn { border-radius: 999px; }
-
-        .network-toast { border-radius: 999px; box-shadow: var(--shadow-lg); }
-        .app-footer { background: transparent; border-top: none; }
-        .splash-logo-box { border-radius: 28px; box-shadow: var(--shadow-lg); }
-        .splash-progress-bar { background: var(--primary-grad); }
     </style>
 </head>
 <body class="pc-mode-grid">
 
-    <!-- MÀN HÌNH CHÀO KHỞI ĐỘNG (SPLASH SCREEN) -->
+    <!-- MÀN HÌNH CHÀO KHỞI ĐỘNG (SPLASH SCREEN) VỚI TIẾN TRÌNH 4 GIÂY MƯỢT MÀ -->
     <div id="splashScreen">
         <div class="splash-logo-box">
             <img src="<?php echo htmlspecialchars($settings['splash_img']); ?>" alt="Logo">
@@ -1541,37 +1360,42 @@ foreach ($raw_schedules as $row) {
         <div class="splash-percent-text" id="splashPercentText">0%</div>
     </div>
 
-    <!-- TOAST THÔNG BÁO TRẠNG THÁI MẠNG -->
+    <!-- 0. TOAST THÔNG BÁO TRẠNG THÁI MẠNG -->
     <div id="networkToast" class="network-toast">
         <i id="networkToastIcon" class="fa-solid"></i>
         <span id="networkToastMsg"></span>
     </div>
 
-    <!-- APP HEADER -->
+    <!-- 1. APP HEADER -->
     <header class="app-header">
         <div class="header-left">
             <h1><i class="fa-solid fa-graduation-cap" style="color: var(--active-theme-color);"></i> Thời Khóa Biểu</h1>
             <span><?php echo htmlspecialchars($settings['semester']); ?> • <?php echo htmlspecialchars($settings['school_year']); ?></span>
         </div>
         <div class="header-right">
+            <!-- 1. NÚT LỊCH THI -->
             <button type="button" onclick="openExamScheduleModal()" class="icon-btn" title="Lịch thi tập trung">
                 <i class="fa-solid fa-trophy" style="color: #f59e0b;"></i>
                 <span class="exam-badge-count" id="examBadgeCount" style="display:none;">0</span>
             </button>
 
+            <!-- 2. NÚT LÀM MỚI TRANG -->
             <button type="button" onclick="manualSync()" id="refreshBtn" class="icon-btn" title="Làm mới dữ liệu">
                 <i class="fa-solid fa-arrows-rotate" style="color: var(--primary);"></i>
             </button>
 
+            <!-- 3. NÚT TÙY CHỌN (GOM CÁC NÚT CÒN LẠI VÀO MENU POPUP) -->
             <button type="button" onclick="toggleMoreMenu(event)" id="moreMenuBtn" class="icon-btn" title="Tùy chọn khác">
                 <i class="fa-solid fa-ellipsis-vertical"></i>
             </button>
 
+            <!-- POPUP MENU TÙY CHỌN -->
             <div class="more-dropdown-menu" id="moreDropdownMenu">
                 <button type="button" class="dropdown-item-btn" onclick="openSubjectSearchModal(); closeMoreMenu();">
                     <i class="fa-solid fa-magnifying-glass" style="color: #ea580c;"></i>
                     <span>Tra cứu môn học</span>
                 </button>
+                <!-- CHỈ HIỂN THỊ TRÊN PC / MÀN HÌNH LỚN -->
                 <button type="button" class="dropdown-item-btn pc-view-toggle-item" id="pcViewToggleDropdownBtn" onclick="togglePcViewMode(); closeMoreMenu();">
                     <i class="fa-solid fa-mobile-screen" id="pcViewToggleIcon" style="color: #6366f1;"></i>
                     <span id="pcViewToggleText">Chế độ di động trên PC</span>
@@ -1592,11 +1416,12 @@ foreach ($raw_schedules as $row) {
         </div>
     </header>
 
+    <!-- NÚT BẬT TẮT TOÀN MÀN HÌNH KHI XOAY NGANG TRÊN MOBILE -->
     <button type="button" class="fullscreen-btn" id="fullScreenToggleBtn" onclick="toggleFullscreen()" title="Bật/Tắt Toàn Màn Hình">
         <i class="fa-solid fa-expand" id="fullScreenIcon"></i>
     </button>
 
-    <!-- HỒ SƠ 2 BÉ -->
+    <!-- 2. HỒ SƠ 2 BÉ -->
     <section class="profile-container">
         <div class="profile-pill active" data-target="all" onclick="changeProfile('all')">
             <div class="profile-avatar" style="background: #4f46e5;"><i class="fa-solid fa-house-user"></i></div>
@@ -1612,7 +1437,7 @@ foreach ($raw_schedules as $row) {
         </div>
     </section>
 
-    <!-- THANH THÁNG VÀ DATE STRIP -->
+    <!-- 3. THANH THÁNG VÀ DATE STRIP -->
     <div class="date-strip-box">
         <div class="month-indicator-bar">
             <div class="month-title"><i class="fa-regular fa-calendar-days"></i> <span id="currentMonthStrDisplay"><?php echo $current_month_str; ?></span></div>
@@ -1639,29 +1464,30 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
-    <!-- WIDGET THÔNG BÁO TIẾT HỌC ĐỘNG & THỜI TIẾT -->
+    <!-- 4. WIDGET THÔNG BÁO TIẾT HỌC ĐỘNG & DỰ BÁO THỜI TIẾT TỪNG BUỔI NINH HÒA -->
     <div class="upcoming-widget" id="upcomingWidget">
         <div id="rainAlertBox" style="display:none; margin-bottom: 8px;"></div>
         <div id="widgetItemsContainer"></div>
     </div>
 
-    <!-- DANH SÁCH DÒNG THỜI GIAN DỌC (AGENDA) -->
+    <!-- 5. DANH SÁCH DÒNG THỜI GIAN DỌC (AGENDA) - CÓ HUY HIỆU BÀI TẬP / KIỂM TRA -->
     <main class="timeline-section" id="timelineMain">
         <div class="timeline-rail" id="timelineStream"></div>
     </main>
 
-    <!-- BẢNG THỜI KHÓA BIỂU DẠNG LƯỚI (DESKTOP / LANDSCAPE) -->
+    <!-- 6. BẢNG THỜI KHÓA BIỂU DẠNG LƯỚI (DESKTOP / LANDSCAPE) - CHỈ TÊN MÔN, GV, GHI CHÚ BA MẸ -->
     <section id="landscapeGridSection">
         <div id="landscapeGridContainer"></div>
     </section>
 
+    <!-- FOOTER MỜ GỌN GÀNG SÁT ĐÁY -->
     <footer class="app-footer">
         <div class="footer-line-1">Thời khóa biểu học tập</div>
         <div class="footer-line-2">Developed by Nguyễn Nhân</div>
-        <div class="footer-line-3">Version 3.0</div>
+        <div class="footer-line-3">Version 1.0</div>
     </footer>
 
-    <!-- MODAL TRA CỨU MÔN HỌC -->
+    <!-- 7. MODAL TRA CỨU MÔN HỌC RIÊNG BIỆT -->
     <div id="subjectSearchModal" class="modal-overlay" onclick="closeSubjectSearchModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -1675,7 +1501,7 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
-    <!-- MODAL XEM CHI TIẾT GIÁO VIÊN -->
+    <!-- 8. MODAL XEM CHI TIẾT GIÁO VIÊN CỦA 1 MÔN -->
     <div id="singleTeacherModal" class="modal-overlay" onclick="closeSingleTeacherModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -1686,7 +1512,7 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
-    <!-- MODAL TOÀN BỘ DANH BẠ GIÁO VIÊN -->
+    <!-- 9. MODAL TOÀN BỘ DANH BẠ GIÁO VIÊN -->
     <div id="allTeachersModal" class="modal-overlay" onclick="closeAllTeachersModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -1733,7 +1559,7 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
-    <!-- MODAL GẮN HUY HIỆU BÀI TẬP / LỊCH KIỂM TRA -->
+    <!-- 10. MODAL GẮN HUY HIỆU BÀI TẬP / LỊCH KIỂM TRA -->
     <div id="todoTagModal" class="modal-overlay" onclick="closeTodoTagModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -1781,7 +1607,7 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
-    <!-- MODAL THỐNG KÊ TẢI LƯỢNG MÔN HỌC -->
+    <!-- 11. MODAL THỐNG KÊ TẢI LƯỢNG MÔN HỌC TRONG TUẦN -->
     <div id="subjectSummaryModal" class="modal-overlay" onclick="closeSubjectSummaryModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -1792,7 +1618,7 @@ foreach ($raw_schedules as $row) {
         </div>
     </div>
 
-    <!-- MODAL LỊCH THI TẬP TRUNG -->
+    <!-- 12. MODAL LỊCH THI TẬP TRUNG CHIA 2 TAB CHO 2 BÉ -->
     <div id="examScheduleModal" class="modal-overlay" onclick="closeExamScheduleModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -1800,6 +1626,7 @@ foreach ($raw_schedules as $row) {
                 <button type="button" class="modal-close-btn" onclick="closeExamScheduleModal()">&times;</button>
             </div>
             <div class="modal-body">
+                <!-- 2 TAB CHỌN BÉ -->
                 <div class="exam-tabs-nav">
                     <button type="button" class="exam-tab-btn active" id="examTabBtn_1" data-kid="1" onclick="switchExamTab('1')">
                         👧 Bé <?php echo htmlspecialchars($settings['kid1_name']); ?> (<?php echo htmlspecialchars($settings['kid1_class']); ?>)
@@ -1816,6 +1643,7 @@ foreach ($raw_schedules as $row) {
                     </button>
                 </div>
 
+                <!-- Form Thêm / Chỉnh sửa lịch thi -->
                 <div id="examFormBox" style="display:none; background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:12px; padding:12px; margin-bottom:14px;">
                     <div style="font-size:13px; font-weight:800; margin-bottom:8px; color:var(--primary);" id="examFormTitle">Nhập Môn Thi Mới</div>
                     <input type="hidden" id="examEditId">
@@ -1871,12 +1699,14 @@ foreach ($raw_schedules as $row) {
                     </div>
                 </div>
 
+                <!-- Danh sách lịch thi của Tab hiện tại -->
                 <div id="examScheduleListContainer"></div>
             </div>
         </div>
     </div>
 
     <script>
+        // --- XỬ LÝ MÀN HÌNH CHÀO KHỞI ĐỘNG (SPLASH SCREEN) 4 GIÂY MƯỢT MÀ ---
         (function() {
             const splash = document.getElementById('splashScreen');
             const progressBar = document.getElementById('splashProgressBar');
@@ -1885,18 +1715,21 @@ foreach ($raw_schedules as $row) {
 
             if (!splash) return;
 
-            const totalDuration = 3000;
+            const totalDuration = 4000; // 4.0 giây mượt mà
             const startTime = performance.now();
 
             function updateSplash(now) {
                 const elapsed = now - startTime;
                 let linearProgress = Math.min(1, elapsed / totalDuration);
+
+                // Hàm Easing tự nhiên (chạy mượt mà, ổn định)
                 let easedProgress = Math.pow(linearProgress, 0.85);
                 let currentPercent = Math.min(100, Math.round(easedProgress * 100));
 
                 if (progressBar) progressBar.style.width = currentPercent + '%';
                 if (percentText) percentText.innerText = currentPercent + '%';
 
+                // Thay đổi thông điệp theo từng giai đoạn tiến trình
                 if (subtitle) {
                     if (currentPercent < 35) {
                         subtitle.innerText = 'Đang kết nối hệ thống dữ liệu...';
@@ -1934,6 +1767,7 @@ foreach ($raw_schedules as $row) {
         let currentProfile = 'all';
         let currentExamTab = '1';
 
+        // --- 1. TỰ ĐỘNG CHUYỂN THỨ / NGÀY THEO THỜI GIAN THỰC ---
         let realTodayKey = '<?php echo $today_field; ?>';
         let weekDates = <?php echo json_encode($week_dates, JSON_UNESCAPED_UNICODE); ?>;
         let currentDay = realTodayKey;
@@ -1981,6 +1815,7 @@ foreach ($raw_schedules as $row) {
             }
         }
 
+        // --- 2. DỰ BÁO THỜI TIẾT GIỜ TAN TRƯỜNG NINH HÒA ---
         async function checkRainAlert() {
             const alertBox = document.getElementById('rainAlertBox');
             if (!alertBox) return;
@@ -2173,6 +2008,7 @@ foreach ($raw_schedules as $row) {
             }
         }
 
+        // --- 3. MENU TÙY CHỌN POPUP HEADER ---
         function toggleMoreMenu(e) {
             e.stopPropagation();
             const menu = document.getElementById('moreDropdownMenu');
@@ -2190,6 +2026,7 @@ foreach ($raw_schedules as $row) {
             }
         });
 
+        // --- 4. MODAL TRA CỨU MÔN HỌC ---
         function openSubjectSearchModal() {
             document.getElementById('subjectSearchInput').value = '';
             filterSubjectSearchList();
@@ -2273,6 +2110,7 @@ foreach ($raw_schedules as $row) {
             }, 250);
         }
 
+        // --- 5. HUY HIỆU / NHÃN BÀI TẬP VÀ KIỂM TRA ---
         function getTodoTags() {
             try {
                 const raw = localStorage.getItem('tkb_todo_tags');
@@ -2320,13 +2158,11 @@ foreach ($raw_schedules as $row) {
                 subjectName = subjectNameEncoded || '';
             }
 
-            const cleanKidId = String(kidId || '1');
-
             document.getElementById('todoSlotKey').value = slotKey;
-            document.getElementById('todoKidId').value = cleanKidId;
+            document.getElementById('todoKidId').value = String(kidId || '1');
             document.getElementById('todoModalSubjectTitle').innerHTML = `<i class="fa-solid fa-book-open"></i> Môn: <b>${subjectName}</b>`;
 
-            const kidName = (cleanKidId === '2') ? (appSettings.kid2_name || 'Thành Phát') : (appSettings.kid1_name || 'Trâm Anh');
+            const kidName = (String(kidId) === '2') ? (appSettings.kid2_name || 'Thành Phát') : (appSettings.kid1_name || 'Trâm Anh');
             document.getElementById('todoModalKidOwner').innerText = `Tiết học của bé: ${kidName}`;
             document.getElementById('todoPassHintText').innerText = `Bắt buộc nhập mật khẩu của bé ${kidName} hoặc mật khẩu Admin để thêm, sửa hoặc xóa.`;
 
@@ -2358,22 +2194,19 @@ foreach ($raw_schedules as $row) {
         function verifyKidOrAdminPassword(kidId, enteredPass) {
             if (!enteredPass) return false;
 
-            // Lấy mật khẩu từ database được nạp vào appSettings
-            const adminPass = String(appSettings.admin_pass || '').trim();
+            const adminPass = String(appSettings.admin_pass || 'admin123').trim();
             if (adminPass !== '' && enteredPass === adminPass) {
                 return true;
             }
 
-            let kid1Pass = String(appSettings.kid1_pass || '').trim();
-            let kid2Pass = String(appSettings.kid2_pass || '').trim();
-
-            if (String(kidId) === '2' || String(kidId).toLowerCase().includes('phát') || String(kidId).toLowerCase().includes('2')) {
-                if (enteredPass === kid2Pass) return true;
+            let targetPass = '';
+            if (String(kidId) === '2') {
+                targetPass = String(appSettings.kid2_pass || '123456').trim();
             } else {
-                if (enteredPass === kid1Pass) return true;
+                targetPass = String(appSettings.kid1_pass || '123456').trim();
             }
 
-            return false;
+            return enteredPass === targetPass;
         }
 
         function saveTodoTag() {
@@ -2462,6 +2295,7 @@ foreach ($raw_schedules as $row) {
             renderAgenda();
         }
 
+        // --- 6. LỊCH THI TẬP TRUNG ---
         function getExamSchedules() {
             try {
                 const raw = localStorage.getItem('tkb_exam_schedules');
@@ -2746,6 +2580,7 @@ foreach ($raw_schedules as $row) {
             container.innerHTML = html;
         }
 
+        // --- 7. TRỢ LÝ GIỌNG NÓI ---
         let isSpeaking = false;
 
         function toggleVoiceSpeech() {
@@ -2879,6 +2714,7 @@ foreach ($raw_schedules as $row) {
             };
         }
 
+        // --- LOCALSTORAGE OFFLINE ---
         function saveToOfflineStorage() {
             try {
                 localStorage.setItem('tkb_offline_scheduleData', JSON.stringify(scheduleData));
@@ -2926,6 +2762,7 @@ foreach ($raw_schedules as $row) {
             saveToOfflineStorage();
         }
 
+        // --- TOAST TRẠNG THÁI MẠNG ---
         let toastTimeout = null;
         function showNetworkToast(type, message) {
             const toast = document.getElementById('networkToast');
@@ -2956,6 +2793,7 @@ foreach ($raw_schedules as $row) {
             syncDataFromServer();
         });
 
+        // --- XỬ LÝ THỜI GIAN ---
         function getEstimatedTimeRange(buoi, tiet) {
             const num = parseInt((tiet || '').replace(/\D/g, '')) || 1;
             const b = (buoi || '').trim().toUpperCase();
@@ -3199,6 +3037,7 @@ foreach ($raw_schedules as $row) {
             container.innerHTML = html;
         }
 
+        // --- 8. BẢNG THỜI KHÓA BIỂU DẠNG LƯỚI ---
         function renderLandscapeGrid() {
             const container = document.getElementById('landscapeGridContainer');
             if (!container) return;
@@ -3571,7 +3410,7 @@ foreach ($raw_schedules as $row) {
                     status: 'NGHỈ NGƠI',
                     statusBg: 'rgba(148, 163, 184, 0.2)',
                     statusColor: '#94a3b8',
-                    subject: 'Không có lịch học',
+                    subject: 'Không có lịch học hôm nay',
                     child: kidName,
                     childColor: kidColor,
                     time: 'Thảnh thơi 🎉',
@@ -3655,6 +3494,7 @@ foreach ($raw_schedules as $row) {
                 let buoiText = (nextSlot.item.buoi || '').toUpperCase();
                 let buoiLabel = buoiText.includes('CHIỀU') ? 'Buổi Chiều' : (buoiText.includes('TỐI') ? 'Buổi Tối' : 'Tiếp theo');
                 let startTimeStr = nextSlot.timeRangeStr.split('-')[0].trim();
+
                 let timeDisplayStr = (statusLabel === 'TIẾT BẮT ĐẦU') ? `${timePrefix} ${startTimeStr}` : `${buoiLabel} lúc ${startTimeStr}`;
 
                 return {
@@ -3700,6 +3540,7 @@ foreach ($raw_schedules as $row) {
                 const target = document.getElementById(cardId);
                 if (target) {
                     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
                     target.classList.add('card-highlight-flash');
                     setTimeout(() => {
                         target.classList.remove('card-highlight-flash');
@@ -3755,12 +3596,14 @@ foreach ($raw_schedules as $row) {
             }
         }
 
+        // --- VUỐT MÀN HÌNH ĐỔI NGÀY TRÊN MOBILE (KHÔNG CAN THIỆP CỬ CHỈ ZOOM 2 NGÓN TAY) ---
         let touchStartX = 0;
         let touchStartY = 0;
         let touchEndX = 0;
         let touchEndY = 0;
 
         document.addEventListener('touchstart', function(e) {
+            // Nếu dùng nhiều hơn 1 ngón tay (đang zoom pinch-to-zoom), huỷ xử lý vuốt đổi ngày
             if (e.touches && e.touches.length > 1) {
                 touchStartX = 0;
                 touchStartY = 0;
@@ -3778,7 +3621,7 @@ foreach ($raw_schedules as $row) {
 
         document.addEventListener('touchend', function(e) {
             if (!touchStartX && !touchStartY) return;
-            if (e.touches && e.touches.length > 0) return;
+            if (e.touches && e.touches.length > 0) return; // Vẫn còn ngón tay khác trên màn hình
 
             touchEndX = e.changedTouches[0].screenX;
             touchEndY = e.changedTouches[0].screenY;
@@ -3805,6 +3648,7 @@ foreach ($raw_schedules as $row) {
             }
         }
 
+        // --- BẬT / TẮT TOÀN MÀN HÌNH ---
         function toggleFullscreen() {
             const icon = document.getElementById('fullScreenIcon');
             if (!document.fullscreenElement && !document.webkitFullscreenElement) {
@@ -3832,6 +3676,7 @@ foreach ($raw_schedules as $row) {
             }
         });
 
+        // --- CHUYỂN ĐỔI CHẾ ĐỘ XEM TRÊN PC ---
         function applyPcViewMode(mode) {
             const icon = document.getElementById('pcViewToggleIcon');
             const text = document.getElementById('pcViewToggleText');
@@ -3982,12 +3827,14 @@ foreach ($raw_schedules as $row) {
             }
         });
 
+        // --- KHỞI CHẠY ỨNG DỤNG ĐÃ TỐI ƯU TỐC ĐỘ (DEFER TÁC VỤ NẶNG) ---
         initPcViewMode();
         refreshRealTimeDates();
         changeDay(realTodayKey);
         renderLandscapeGrid();
         updateExamBadgeCount();
 
+        // Trì hoãn gọi mạng ngầm (thời tiết & đồng bộ server) để app hiển thị giao diện tức thì không bị chậm
         setTimeout(() => {
             checkRainAlert();
             if (navigator.onLine) {
